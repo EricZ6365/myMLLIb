@@ -23,10 +23,10 @@ from torch.utils.data import DataLoader, Subset
 class SimpleConvModel(Model):
     def __init__(self):
         super().__init__()
-        self.conv1 = Conv1d(self.grad, in_c=1, out_c=8, kernel_size=5)
-        self.conv2 = Conv1d(self.grad, in_c=8, out_c=16, kernel_size=5)
-        self.conv3 = Conv1d(self.grad, in_c=16, out_c=16, kernel_size=5)
-        self.fc = Linear(self.grad, in_feature=16 * (10 * 10 - 12), out_feature=10)
+        self.conv1 = Conv1d(self.grad, in_c=1, out_c=2, kernel_size=5)
+        self.conv2 = Conv1d(self.grad, in_c=2, out_c=2, kernel_size=5)
+        self.conv3 = Conv1d(self.grad, in_c=2, out_c=4, kernel_size=5)
+        self.fc = Linear(self.grad, in_feature=4 * (15 * 15 - 12), out_feature=10)
 
         self.register_module(self.conv1)
         self.register_module(self.conv2)
@@ -49,9 +49,9 @@ def one_hot_encode(label, num_classes=10):
 
 def load_mnist(batch_size=16, limit=60):
     transform = transforms.Compose([
-        transforms.Resize((10, 10)),
+        transforms.Resize((15, 15)),
         transforms.ToTensor(),  # [0,1]
-        transforms.Lambda(lambda x: x.reshape(1, 10 * 10))
+        transforms.Lambda(lambda x: x.reshape(1, 15 * 15))
     ])
     mnist = datasets.MNIST(root="./data", train=True, download=True, transform=transform)
 
@@ -99,9 +99,10 @@ class TorchConv1dModel(nn.Module):
         x = x.mean(dim=2)
         return x
 def log_softmax(x, dim=1):
-    x_max = x.max(dim=dim).unsqueeze(dim - 1)
+    x_max = x.max(dim=dim)
+
     shifted = x - x_max
-    logsumexp = (shifted.exp()).sum(dim=dim).unsqueeze(dim - 1).log()
+    logsumexp = (shifted.exp()).sum(dim=dim).log()
     return shifted - logsumexp
 
 
@@ -185,8 +186,8 @@ if __name__ == "__main__":
     # visualize.visualize_DCG(loss)
     # # exit()
     random.seed(42)
-    batch_size = 1
-    X_batched, y_batched = load_mnist(batch_size=batch_size, limit=2)
+    batch_size = 2
+    X_batched, y_batched = load_mnist(batch_size=batch_size, limit=100)
 
     model = SimpleConvModel()
     tiny_losses, tiny_accs = [], []
@@ -197,12 +198,12 @@ if __name__ == "__main__":
         for b_X, b_y in tqdm(zip(X_batched, y_batched), total=len(X_batched), desc=f"[Tiny] Epoch {epoch}"):
             pred = model.forward(b_X)
             b_y.grad_node = GradNode(None, None)
-            loss = abs(pred - b_y).mean()
+            loss = cross_entropy_loss(pred, b_y)
             epoch_loss += loss.value()
-            visualize.visualize_DCG(loss)
+            # visualize.visualize_DCG(loss)
             model.backward(loss, lr=1e-3, momentum=0.)
             acc += get_acc(pred, b_y)
-            # visualize.visualize_DCG(loss)
+
         tiny_losses.append(epoch_loss)
         tiny_accs.append(acc / len(X_batched))
         print(f"[Tiny]  Epoch {epoch:3d} | Loss = {epoch_loss:.4f} | Acc = {100 * acc / len(X_batched):.2f}%")

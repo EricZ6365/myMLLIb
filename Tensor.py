@@ -145,6 +145,9 @@ class Tensor:
         return result
 
     def unsqueeze(self, dim):
+        if dim < 0:
+            dim += len(self.shape) + 1
+
         result = Tensor.__new__(Tensor)
         result.data = self.data
         result.shape = tuple(list(self.shape[:dim]) + [1] + list(self.shape[dim:]))
@@ -283,28 +286,31 @@ class Tensor:
         result.require_grad = self.require_grad
         return result
 
-    def __pow__(self, power, modulo=None): self._bind_broadcast(power, "pow") if power.shape != self.shape else self.pow(power)
+    def __pow__(self, power, modulo=None): self._bind_broadcast(power, "pow")
     def __neg__(self): return self.neg()
     def __abs__(self): return self.abs()
-    def __add__(self, other): return self._bind_broadcast(other, "add") if other.shape != self.shape else self.add(other)
-    def __sub__(self, other): return self._bind_broadcast(other, "sub") if other.shape != self.shape else self.sub(other)
-    def __mul__(self, other): return self._bind_broadcast(other, "mul") if other.shape != self.shape else self.mul(other)
-    def __truediv__(self, other): return self._bind_broadcast(other, "div") if isinstance().shape != self.shape else self.div(other)
+    def __add__(self, other): return self._bind_broadcast(other, "add")
+    def __sub__(self, other): return self._bind_broadcast(other, "sub")
+    def __mul__(self, other): return self._bind_broadcast(other, "mul")
+    def __truediv__(self, other): return self._bind_broadcast(other, "div")
     def __getitem__(self, *args, **kwargs): return self._getitem(*args)
     def __setitem__(self, key, value): return self._setitem(key, value)
 
     @staticmethod
     def _bi_broadcast(a, b, op_name):
+        func = getattr(a, op_name)
+        if not isinstance(b, Tensor) or a.shape == b.shape:
+            return func(b)
+
         def _inner(a, b):
             sa, sb = tuple(a.shape), tuple(b.shape)
             max_len = max(len(sa), len(sb))
-
             for _ in range(max_len - len(sa)):
-                a = a.unsqueeze(0)
+                a = a.unsqueeze(-1)
                 sa = a.shape
 
             for _ in range(max_len - len(sb)):
-                b = b.unsqueeze(0)
+                b = b.unsqueeze(-1)
                 sb = b.shape
 
             for a_axis, b_axis in zip(sa, sb):
@@ -317,9 +323,8 @@ class Tensor:
                         raise ValueError(f"Incompatible broadcast shapes: {a.shape} and {b.shape}")
 
             return a, b
-
         a_norm, b_norm = _inner(a, b)
-        return getattr(a_norm, op_name)(b_norm)
+        return func(b_norm)
 
     def _bind_broadcast(self, other, op_name):
         return Tensor._bi_broadcast(self, other, op_name)
