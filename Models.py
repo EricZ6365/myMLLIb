@@ -1,3 +1,7 @@
+import math
+
+import matplotlib.pyplot as plt
+
 import visualize
 from Autograd import Autograd
 from Tensor import Tensor
@@ -50,6 +54,9 @@ class Model:
             T.data = new_data
 
 
+    def zero(self):
+        self.grad.zero()
+
 class Module:
     def __init__(self, grad):
         self._tensors = []
@@ -94,11 +101,10 @@ class Conv1d(Module):
 
         out = []
         W = self.weight.unsqueeze(0)  # (1, out_c, C, k)
-
         for i in range(L_out):
             start = i * s
             end = start + k
-            x_win = x._getitem((slice(None), slice(None), slice(start, end)))  # (B, C, k)
+            x_win = x[:, :, start:end]
             x_win = x_win.unsqueeze(1).broadcast((B, self.out_c, C, k))
             Wb = W.broadcast((B, self.out_c, C, k))
 
@@ -106,7 +112,7 @@ class Conv1d(Module):
             y = x_win.mul(Wb).sum(dim=2).sum(dim=2)  # (B, out_c)
 
             if self.bias is not None:
-                y = y + self.bias.unsqueeze(0).broadcast((B, self.out_c))  # (B, out_c)
+                y = y.clamp(0, float("inf")) + self.bias.unsqueeze(0).broadcast((B, self.out_c))  # (B, out_c)
 
             # Add dimension for length
             y = y.unsqueeze(2)  # (B, out_c, 1)
@@ -114,11 +120,24 @@ class Conv1d(Module):
 
         return out[0].concat(*out[1:], dim=2)  # (B, out_c, L_out)
 
+    def visualize_output(self, x):
+        y_out = self.forward(x)[0]
+        out_c = y_out.shape[0]
+        fig, axs = plt.subplots(out_c, 1)
+        for i in range(out_c):
+            data = []
+            step_size = int(math.sqrt(y_out.shape[1]))
+            for idx in range(0, y_out.shape[1] - step_size, step_size):
+                data.append(y_out[i, idx:idx + step_size].data)
+            axs[i].imshow(data)
+        plt.show()
+
+
 
 class Linear(Module):
     def __init__(self, grad, in_feature, out_feature):
         super().__init__(grad)
-        self.linear = Tensor.randn(in_feature, out_feature)
+        self.linear = Tensor.randn(in_feature, out_feature) / math.sqrt(in_feature + out_feature)
         self.bias = Tensor.randn(1, out_feature)
         self.register_tensor(self.linear)
         self.register_tensor(self.bias)

@@ -3,7 +3,7 @@ import math
 import random
 
 from matplotlib import pyplot as plt
-
+''
 import visualize
 from Tensor import Tensor
 
@@ -370,9 +370,6 @@ class GradNode:
                 child.grad_node.grad_a = grads[i]
             else:
                 child.grad_node.grad_a = child.grad_node.grad_a + grads[i]
-
-    def zero(self):
-        self.grad_a = 0
 
     def __repr__(self):
         return f"grad: {self.grad_a}"
@@ -781,10 +778,11 @@ class Autograd:
             node.back()
             for child in node.children:
                 queue.append(child)
+
         self.no_track = False
-        self.tensor_to_node.clear()
 
     def zero(self):
-        for _, n in self.tensor_to_node.items():
-            n.grad_a = 0
-
+        for t, n in self.tensor_to_node.items():
+            del t.grad_node
+        self.no_track = True
+        self.tensor_to_node.clear()

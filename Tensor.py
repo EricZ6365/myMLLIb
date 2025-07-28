@@ -62,7 +62,7 @@ class Tensor:
     @staticmethod
     def _get_shape(data):
         shape = []
-        while isinstance(data, list):
+        while isinstance(data, list) or isinstance(data, tuple):
             shape.append(len(data))
             if len(data) == 0:
                 break

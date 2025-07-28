@@ -1,13 +1,15 @@
 import math
+import os
 import random
+import sys
 
+import torchvision.io.image
 from tqdm import tqdm
 
 import visualize
 from Tensor import Tensor
 from Autograd import Autograd, GradNode
 from Models import Model, Conv1d, Linear
-import matplotlib.pyplot as plt
 import numpy as np
 from torchvision import datasets, transforms
 
@@ -23,24 +25,36 @@ from torch.utils.data import DataLoader, Subset
 class SimpleConvModel(Model):
     def __init__(self):
         super().__init__()
-        self.conv1 = Conv1d(self.grad, in_c=1, out_c=2, kernel_size=5)
-        self.conv2 = Conv1d(self.grad, in_c=2, out_c=2, kernel_size=5)
-        self.conv3 = Conv1d(self.grad, in_c=2, out_c=4, kernel_size=5)
-        self.fc = Linear(self.grad, in_feature=4 * (15 * 15 - 12), out_feature=10)
+        self.conv1 = Conv1d(self.grad, in_c=3, out_c=4, kernel_size=3)
+        self.conv2 = Conv1d(self.grad, in_c=4, out_c=4, kernel_size=3)
+        self.conv3 = Conv1d(self.grad, in_c=4, out_c=4, kernel_size=3)
+        self.fc = Linear(self.grad, in_feature=4 * (20 * 20 - 6), out_feature=30)
+        self.fc2 = Linear(self.grad, in_feature=30, out_feature=50)
 
         self.register_module(self.conv1)
         self.register_module(self.conv2)
         self.register_module(self.conv3)
         self.register_module(self.fc)
+        self.register_module(self.fc2)
 
     def forward(self, x):
-        x = self.conv1(x).clamp(0, float("inf"))
-        x = self.conv2(x).clamp(0, float("inf"))
+        x = self.conv1(x)
+        x = self.conv2(x)
         x = self.conv3(x)
         x = x.flatten(1)
-        x = self.fc(x)
+        x = self.fc(x).clamp(0, float("inf"))
+        x = self.fc2(x)
         return x
 
+    def inference(self, x):
+        self.grad.no_track = True
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = x.flatten(1)
+        x = self.fc(x).clamp(0, float("inf"))
+        x = self.fc2(x)
+        return x
 
 def one_hot_encode(label, num_classes=10):
     vec = [0.] * num_classes
@@ -71,6 +85,45 @@ def load_mnist(batch_size=16, limit=60):
 
     return X_batched, y_batched
 
+def load_sneaker(batch_size, limit, split=0.8, data_dir="data/sneakers"):
+    data_pair = []
+    num_classes = len(os.listdir(data_dir))
+    resize_transform = transforms.Compose((
+        transforms.Resize((20, 20)),
+        transforms.Lambda(lambda x: x.reshape(3, 20 * 20))
+    ))
+
+    for data_idx, class_dir in enumerate(os.listdir(data_dir)):
+        class_path = os.path.join(data_dir, class_dir)
+        if not os.path.isdir(class_path):
+            continue
+        for file_name in os.listdir(class_path):
+            if len(data_pair) >= limit:
+                break
+            file_path = os.path.join(class_path, file_name)
+            try:
+                image = torchvision.io.read_image(file_path).float() / 255.0  # Normalize
+                image = resize_transform(image).tolist()
+
+                label = one_hot_encode(data_idx, num_classes)
+                data_pair.append([image, label])
+            except Exception as e:
+                print(f"Error loading {file_path}: {e}")
+
+    random.shuffle(data_pair)
+
+    split_idx = int(len(data_pair) * split)
+    train_data = data_pair[:split_idx]
+    val_data = data_pair[split_idx:]
+
+    def make_batches(data):
+        return [data[i:i + batch_size] for i in range(0, len(data), batch_size)]
+
+    train_batches = make_batches(train_data)
+    val_batches = make_batches(val_data)
+
+    return train_batches, val_batches
+
 
 # -------------------------------------------------
 # NEW: helpers to measure accuracy for tiny-autograd
@@ -98,6 +151,7 @@ class TorchConv1dModel(nn.Module):
         x = self.conv3(x)
         x = x.mean(dim=2)
         return x
+
 def log_softmax(x, dim=1):
     x_max = x.max(dim=dim)
 
@@ -109,7 +163,7 @@ def log_softmax(x, dim=1):
 def cross_entropy_loss(pred, target):
     logit = log_softmax(pred, dim=1)
     loss = -(logit * target).sum(dim=1)
-    return loss.mean()
+    return loss.sum(None)
 
 def get_torch_loader(batch_size=64, limit=200):
     transform = transforms.Compose([
@@ -185,45 +239,69 @@ if __name__ == "__main__":
     # print(a.get_grad())
     # visualize.visualize_DCG(loss)
     # # exit()
+    import random
+    import matplotlib.pyplot as plt
+    from tqdm import tqdm
+
     random.seed(42)
-    batch_size = 2
-    X_batched, y_batched = load_mnist(batch_size=batch_size, limit=100)
+    batch_size = 8
+    train_batch, val_batch = load_sneaker(batch_size=batch_size, limit=100)
 
     model = SimpleConvModel()
-    tiny_losses, tiny_accs = [], []
+    tiny_train_losses, tiny_val_losses = [], []
+    tiny_train_accs, tiny_val_accs = [], []
 
     for epoch in range(100):
-        epoch_loss = 0.0
-        acc = 0
-        for b_X, b_y in tqdm(zip(X_batched, y_batched), total=len(X_batched), desc=f"[Tiny] Epoch {epoch}"):
+        # ---------- Training ----------
+        model.zero()
+        train_loss = 0.0
+        train_acc = 0
+
+        for batch in tqdm(train_batch, total=len(train_batch), desc=f"[Tiny] Epoch {epoch} (train)"):
+            b_X, b_y = zip(*batch)
+            b_X = Tensor(b_X)
+            b_y = Tensor(b_y)
+
             pred = model.forward(b_X)
             b_y.grad_node = GradNode(None, None)
             loss = cross_entropy_loss(pred, b_y)
-            epoch_loss += loss.value()
-            # visualize.visualize_DCG(loss)
-            model.backward(loss, lr=1e-3, momentum=0.)
-            acc += get_acc(pred, b_y)
 
-        tiny_losses.append(epoch_loss)
-        tiny_accs.append(acc / len(X_batched))
-        print(f"[Tiny]  Epoch {epoch:3d} | Loss = {epoch_loss:.4f} | Acc = {100 * acc / len(X_batched):.2f}%")
+            train_loss += loss.value()
+            model.backward(loss, lr=5e-3, momentum=0.5)
+            model.zero()
+            train_acc += get_acc(pred, b_y)
 
-    # ------------------- PyTorch -------------------
-    _, torch_losses, torch_accs = train_torch(limit=200, epochs=10, batch_size=64, lr=1e-2)
+        avg_train_acc = train_acc / len(train_batch)
+        avg_train_loss = train_loss / len(train_batch)
+        tiny_train_losses.append(avg_train_loss)
+        tiny_train_accs.append(avg_train_acc)
 
-    # ------------------- Visualization -------------------
-    plt.figure(figsize=(7, 3))
-    plt.subplot(1, 2, 1)
-    plt.plot(tiny_losses, label="tiny-autograd")
-    plt.plot(torch_losses, label="PyTorch")
-    plt.title("Loss")
-    plt.xlabel("Epoch"); plt.ylabel("Loss"); plt.grid(True); plt.legend()
+        val_loss = 0.0
+        val_acc = 0
+        for batch in tqdm(val_batch, total=len(val_batch), desc=f"[Tiny] Epoch {epoch} (val)"):
+            b_X, b_y = zip(*batch)
 
-    plt.subplot(1, 2, 2)
-    plt.plot(tiny_accs, label="tiny-autograd")
-    plt.plot(torch_accs, label="PyTorch")
-    plt.title("Accuracy")
-    plt.xlabel("Epoch"); plt.ylabel("Acc"); plt.grid(True); plt.legend()
+            b_X = Tensor(b_X)
+            b_y = Tensor(b_y)
 
-    plt.tight_layout()
-    plt.show()
+            pred = model.forward(b_X)
+            loss = cross_entropy_loss(pred, b_y)
+
+            val_loss += loss.value()
+            val_acc += get_acc(pred, b_y)
+
+        avg_val_acc = val_acc / len(val_batch)
+        avg_val_loss = val_loss / len(val_batch)
+        tiny_val_losses.append(avg_val_loss)
+        tiny_val_accs.append(avg_val_acc)
+
+        # ---------- Output ----------
+        print(f"[Tiny] Epoch {epoch:3d} | "
+              f"Train Loss = {avg_train_loss:.4f}, Train Acc = {100 * avg_train_acc:.2f}% | "
+              f"Val Loss = {avg_val_loss:.4f}, Val Acc = {100 * avg_val_acc:.2f}%")
+
+        # Optional visualization
+        if epoch % 20 == 0:
+            inter = model.conv1.forward(b_X).clamp(0, float("inf"))
+            inter = model.conv2.forward(inter).clamp(0, float("inf"))
+            model.conv3.visualize_output(inter)
