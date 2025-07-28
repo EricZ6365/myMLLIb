@@ -289,7 +289,7 @@ class Tensor:
     def __add__(self, other): return self._bind_broadcast(other, "add") if other.shape != self.shape else self.add(other)
     def __sub__(self, other): return self._bind_broadcast(other, "sub") if other.shape != self.shape else self.sub(other)
     def __mul__(self, other): return self._bind_broadcast(other, "mul") if other.shape != self.shape else self.mul(other)
-    def __truediv__(self, other): return self._bind_broadcast(other, "div") if other.shape != self.shape else self.div(other)
+    def __truediv__(self, other): return self._bind_broadcast(other, "div") if isinstance().shape != self.shape else self.div(other)
     def __getitem__(self, *args, **kwargs): return self._getitem(*args)
     def __setitem__(self, key, value): return self._setitem(key, value)
 
