@@ -137,7 +137,8 @@ class Conv1d(Module):
 class Linear(Module):
     def __init__(self, grad, in_feature, out_feature):
         super().__init__(grad)
-        self.linear = Tensor.randn(in_feature, out_feature) / math.sqrt(in_feature + out_feature)
+
+        self.linear = Tensor.randn(in_feature, out_feature) / math.sqrt(in_feature * out_feature)
         self.bias = Tensor.randn(1, out_feature)
         self.register_tensor(self.linear)
         self.register_tensor(self.bias)

@@ -8,6 +8,35 @@ import visualize
 _eps = 1e-12
 
 class Tensor:
+    __slots__ = [
+        "data",
+        "shape",
+        "require_grad",
+        "grad_node",
+        "stride",
+        "velocity",
+        "__dict__",
+    ]
+
+    pool = set()
+    in_use = set()
+
+    def __new__(cls, *args, **kwargs):
+        if cls.pool:
+            tensor = cls.pool.pop()
+        else:
+            tensor = super().__new__(cls)
+        cls.in_use.add(tensor)
+
+        return tensor
+
+    def release(self):
+        if self in self.__class__.in_use:
+            self.__class__.in_use.remove(self)
+            self.__class__.pool.add(self)
+        else:
+            print("Tensor not in use, cannot release")
+
     def __init__(self, data, require_grad=True):
         self.data = self.flat(data)
         self.shape = self._get_shape(data)
@@ -30,11 +59,10 @@ class Tensor:
             for li in data:
                 res.extend(Tensor.flat(li))
         return res
-
     @staticmethod
     def randn(*sizes, require_grad=True):
         randn_tensor = Tensor.__new__(Tensor)
-        randn_tensor.data = [random.normalvariate() for i in range(reduce(mul, sizes, 1))]
+        randn_tensor.data  = [random.normalvariate() for i in range(reduce(mul, sizes, 1))]
         randn_tensor.shape = sizes
         randn_tensor.shape = sizes
         randn_tensor.stride = Tensor.compute_stride(sizes)

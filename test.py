@@ -2,7 +2,7 @@ import math
 import os
 import random
 import sys
-
+from profiler import SimpleProfiler
 import torchvision.io.image
 from tqdm import tqdm
 
@@ -23,13 +23,13 @@ from torch.utils.data import DataLoader, Subset
 # Your tiny-autograd model (unchanged)
 # -------------------------------------------------
 class SimpleConvModel(Model):
-    def __init__(self):
+    def __init__(self, num_class):
         super().__init__()
         self.conv1 = Conv1d(self.grad, in_c=3, out_c=4, kernel_size=3)
         self.conv2 = Conv1d(self.grad, in_c=4, out_c=4, kernel_size=3)
-        self.conv3 = Conv1d(self.grad, in_c=4, out_c=4, kernel_size=3)
-        self.fc = Linear(self.grad, in_feature=4 * (20 * 20 - 6), out_feature=30)
-        self.fc2 = Linear(self.grad, in_feature=30, out_feature=50)
+        self.conv3 = Conv1d(self.grad, in_c=4, out_c=8, kernel_size=3)
+        self.fc = Linear(self.grad, in_feature=8 * (30 * 30 - 6), out_feature=num_class)
+        self.fc2 = Linear(self.grad, in_feature=num_class, out_feature=num_class)
 
         self.register_module(self.conv1)
         self.register_module(self.conv2)
@@ -63,9 +63,9 @@ def one_hot_encode(label, num_classes=10):
 
 def load_mnist(batch_size=16, limit=60):
     transform = transforms.Compose([
-        transforms.Resize((15, 15)),
+        transforms.Resize((30, 30)),
         transforms.ToTensor(),  # [0,1]
-        transforms.Lambda(lambda x: x.reshape(1, 15 * 15))
+        transforms.Lambda(lambda x: x.reshape(3, 30 * 30))
     ])
     mnist = datasets.MNIST(root="./data", train=True, download=True, transform=transform)
 
@@ -85,44 +85,46 @@ def load_mnist(batch_size=16, limit=60):
 
     return X_batched, y_batched
 
-def load_sneaker(batch_size, limit, split=0.8, data_dir="data/sneakers"):
+def load_sneaker(batch_size, limit, image_size, split=0.8, data_dir="data/sneakers"):
     data_pair = []
     num_classes = len(os.listdir(data_dir))
-    resize_transform = transforms.Compose((
-        transforms.Resize((20, 20)),
-        transforms.Lambda(lambda x: x.reshape(3, 20 * 20))
-    ))
+    resize_transform = transforms.Compose([
+        transforms.Resize(image_size),
+        transforms.Lambda(lambda x: x.reshape(3, image_size[0] * image_size[1]))
+    ])
 
+    total_loaded = 0
     for data_idx, class_dir in enumerate(os.listdir(data_dir)):
         class_path = os.path.join(data_dir, class_dir)
+        if total_loaded > limit:
+            break
         if not os.path.isdir(class_path):
             continue
         for file_name in os.listdir(class_path):
-            if len(data_pair) >= limit:
-                break
             file_path = os.path.join(class_path, file_name)
             try:
                 image = torchvision.io.read_image(file_path).float() / 255.0  # Normalize
                 image = resize_transform(image).tolist()
 
-                label = one_hot_encode(data_idx, num_classes)
-                data_pair.append([image, label])
+                data_pair.append([image, data_idx])
+                total_loaded += 1
             except Exception as e:
                 print(f"Error loading {file_path}: {e}")
 
     random.shuffle(data_pair)
-
+    data_pair = data_pair[:limit]
     split_idx = int(len(data_pair) * split)
     train_data = data_pair[:split_idx]
     val_data = data_pair[split_idx:]
 
     def make_batches(data):
-        return [data[i:i + batch_size] for i in range(0, len(data), batch_size)]
+        return [[[a, one_hot_encode(b, data_idx)] for a, b in data[i:i + batch_size]] for i in range(0, len(data), batch_size)]
 
     train_batches = make_batches(train_data)
     val_batches = make_batches(val_data)
 
-    return train_batches, val_batches
+    return train_batches, val_batches, data_idx
+
 
 
 # -------------------------------------------------
@@ -245,15 +247,15 @@ if __name__ == "__main__":
 
     random.seed(42)
     batch_size = 8
-    train_batch, val_batch = load_sneaker(batch_size=batch_size, limit=100)
+    image_size = 30, 30
+    train_batch, val_batch, num_class = load_sneaker(batch_size=batch_size, limit=500, image_size=image_size)
 
-    model = SimpleConvModel()
+    model = SimpleConvModel(num_class)
     tiny_train_losses, tiny_val_losses = [], []
     tiny_train_accs, tiny_val_accs = [], []
 
-    for epoch in range(100):
+    for epoch in range(10):
         # ---------- Training ----------
-        model.zero()
         train_loss = 0.0
         train_acc = 0
 
@@ -264,10 +266,11 @@ if __name__ == "__main__":
 
             pred = model.forward(b_X)
             b_y.grad_node = GradNode(None, None)
+            print(pred.shape, b_y.shape)
             loss = cross_entropy_loss(pred, b_y)
 
             train_loss += loss.value()
-            model.backward(loss, lr=5e-3, momentum=0.5)
+            model.backward(loss, lr=1e-4, momentum=0.5)
             model.zero()
             train_acc += get_acc(pred, b_y)
 
@@ -275,7 +278,6 @@ if __name__ == "__main__":
         avg_train_loss = train_loss / len(train_batch)
         tiny_train_losses.append(avg_train_loss)
         tiny_train_accs.append(avg_train_acc)
-
         val_loss = 0.0
         val_acc = 0
         for batch in tqdm(val_batch, total=len(val_batch), desc=f"[Tiny] Epoch {epoch} (val)"):
@@ -284,7 +286,7 @@ if __name__ == "__main__":
             b_X = Tensor(b_X)
             b_y = Tensor(b_y)
 
-            pred = model.forward(b_X)
+            pred = model.inference(b_X)
             loss = cross_entropy_loss(pred, b_y)
 
             val_loss += loss.value()
@@ -301,7 +303,7 @@ if __name__ == "__main__":
               f"Val Loss = {avg_val_loss:.4f}, Val Acc = {100 * avg_val_acc:.2f}%")
 
         # Optional visualization
-        if epoch % 20 == 0:
+        if epoch % 2 == 0:
             inter = model.conv1.forward(b_X).clamp(0, float("inf"))
             inter = model.conv2.forward(inter).clamp(0, float("inf"))
             model.conv3.visualize_output(inter)

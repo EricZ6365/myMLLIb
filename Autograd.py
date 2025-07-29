@@ -3,7 +3,7 @@ import math
 import random
 
 from matplotlib import pyplot as plt
-''
+
 import visualize
 from Tensor import Tensor
 
@@ -43,10 +43,12 @@ def _broadcast_derv(a, wa, shape):
         wa = wa.squeeze(0)
     return [wa]
 
-
-
-
 class MulOp:
+    __slots__ = [
+        "a",
+        "b",
+        "inputs"
+    ]
     def __init__(self, a, b):
         self.a = a
         self.b = b
@@ -56,6 +58,11 @@ class MulOp:
         return _mul_derv(grad_output, self.a, self.b)
 
 class DivOp:
+    __slots__ = [
+        "a",
+        "b",
+        "inputs"
+    ]
     def __init__(self, a, b):
         self.a = a
         self.b = b
@@ -67,6 +74,11 @@ class DivOp:
         return grad_a, grad_b
 
 class PowOp:
+    __slots__ = [
+        "a",
+        "b",
+        "inputs"
+    ]
     def __init__(self, a, b):
         self.a = a
         self.b = b
@@ -77,8 +89,11 @@ class PowOp:
         grad_b = grad_output * output * self.a.log()
         return grad_a, grad_b
 
-
 class ExpOp:
+    __slots__ = [
+        "a",
+        "inputs"
+    ]
     def __init__(self, a):
         self.a = a
         self.inputs = [a]
@@ -88,6 +103,10 @@ class ExpOp:
         return [grad_a]
 
 class LnOp:
+    __slots__ = [
+        "a",
+        "inputs"
+    ]
     def __init__(self, a):
         self.a = a
         self.inputs = [a]
@@ -96,6 +115,11 @@ class LnOp:
         return [grad_output / self.a]
 
 class LogOp:
+    __slots__ = [
+        "a",
+        "b",
+        "inputs"
+    ]
     def __init__(self, a, b):
         self.a = a
         self.b = b
@@ -106,8 +130,12 @@ class LogOp:
         grad_b = grad_output * -(self.a.log() / (self.b * (self.b.log() ** 2)))
         return grad_a, grad_b
 
-
 class MatMulOp:
+    __slots__ = [
+        "a",
+        "b",
+        "inputs"
+    ]
     def __init__(self, a, b):
         self.a = a
         self.b = b
@@ -116,8 +144,13 @@ class MatMulOp:
     def back(self, grad_output, output):
         return _matmul_derv(grad_output, self.a, self.b)
 
-
 class SumOp:
+    __slots__ = [
+        "a",
+        "dim",
+        "keepdims",
+        "inputs"
+    ]
     def __init__(self, inp, dim=None, keepdims=False):
         self.a = inp
         self.dim = dim
@@ -150,8 +183,11 @@ class SumOp:
         grad_input = reshaped_grad.broadcast(self.a.shape)
         return [grad_input]
 
-
 class MeanOp:
+    __slots__ = [
+        "a",
+        "inputs"
+    ]
     def __init__(self, inp):
         self.a = inp
         self.inputs = [self.a]
@@ -164,6 +200,11 @@ class MeanOp:
         return [grad_input]
 
 class MaxOp:
+    __slots__ = [
+        "a",
+        "dim",
+        "inputs"
+    ]
     def __init__(self, inp, dim):
         self.a = inp
         self.dim = dim
@@ -209,8 +250,12 @@ class MaxOp:
             result.require_grad = self.a.require_grad
             return [result]
 
-
 class SubOp:
+    __slots__ = [
+        "a",
+        "b",
+        "inputs"
+    ]
     def __init__(self, a, b):
         self.a = a
         self.b = b
@@ -220,6 +265,11 @@ class SubOp:
         return grad_output, -grad_output
 
 class AddOp:
+    __slots__ = [
+        "a",
+        "b",
+        "inputs"
+    ]
     def __init__(self, a, b):
         self.a = a
         self.b = b
@@ -229,6 +279,10 @@ class AddOp:
         return grad_output, grad_output
 
 class AbsOp:
+    __slots__ = [
+        "a",
+        "inputs"
+    ]
     def __init__(self, inp):
         self.a = inp
         self.inputs = [self.a]
@@ -243,6 +297,12 @@ class AbsOp:
         return [grad_input]
 
 class ClampOp:
+    __slots__ = [
+        "a",
+        "min_value",
+        "max_value",
+        "inputs"
+    ]
     def __init__(self, inp, min_value, max_value):
         self.a = inp
         self.min_value = min_value
@@ -263,6 +323,11 @@ class ClampOp:
         return [grad_input]
 
 class BroadCastOp:
+    __slots__ = [
+        "a",
+        "target_shape",
+        "inputs"
+    ]
     def __init__(self, inp, b):
         self.a = inp
         self.target_shape = b
@@ -273,6 +338,11 @@ class BroadCastOp:
         return _broadcast_derv(self.a, grad_output, self.target_shape)
 
 class IndexOp:
+    __slots__ = [
+        "a",
+        "inputs",
+        "slices"
+    ]
     def __init__(self, inp, *slices):
         self.a = inp
         if len(slices) == 1 and isinstance(slices[0], int):
@@ -287,6 +357,11 @@ class IndexOp:
         return [mask]
 
 class UnsqueezeOp:
+    __slots__ = [
+        "a",
+        "inputs",
+        "dim"
+    ]
     def __init__(self, inp, dim):
         self.a = inp
         self.inputs = [self.a]
@@ -296,6 +371,11 @@ class UnsqueezeOp:
         return [grad_output.squeeze(self.dim)]
 
 class SqueezeOp:
+    __slots__ = [
+        "a",
+        "inputs",
+        "dim"
+    ]
     def __init__(self, inp, dim):
         self.a = inp
         self.inputs = [self.a]
@@ -305,6 +385,12 @@ class SqueezeOp:
         return [grad_output.unqueeze(self.dim)]
 
 class ConcatOp:
+    __slots__ = [
+        "n",
+        "inputs",
+        "shapes",
+        "dim"
+    ]
     def __init__(self, tensors, dim):
         self.dim = dim
         self.inputs = tensors
@@ -327,6 +413,11 @@ class ConcatOp:
         return tuple(grads)
 
 class FlattenOp:
+    __slots__ = [
+        "a",
+        "inputs",
+        "dim"
+    ]
     def __init__(self, inp, dim):
         self.a = inp
         self.inputs = [self.a]
@@ -341,15 +432,23 @@ class FlattenOp:
         return [res]
 
 class NegOp:
+    __slots__ = [
+        "a",
+        "inputs"
+    ]
     def __init__(self, a):
         self.a = a
         self.inputs = [a]
 
     def back(self, grad_output, output):
         return [-grad_output]
-
-
 class GradNode:
+    __slots__ = [
+        "op",
+        "out",
+        "grad_a",
+        "children"
+    ]
     def __init__(self, op, out):
         self.op = op
         self.out = out
@@ -379,37 +478,26 @@ class Autograd:
         self.tensor_to_node = {}
         self.no_track = False
         for tensor in tensors:
-            self.bind_one_tensor(tensor)
-            setattr(tensor, "grad_node", GradNode(None, None))
+            self.init_one_tensor(tensor)
 
     def init_one_tensor(self, tensor):
         self.bind_one_tensor(tensor)
         setattr(tensor, "grad_node", GradNode(None, None))
 
     def bind_one_tensor(self, tensor):
-        setattr(tensor, "matmul", self._hook_to_op(tensor, "matmul"))
-        setattr(tensor, "mul", self._hook_to_op(tensor, "mul"))
-        setattr(tensor, "div", self._hook_to_op(tensor, "div"))
-        setattr(tensor, "sum", self._hook_to_op(tensor, "sum"))
-        setattr(tensor, "sub", self._hook_to_op(tensor, "sub"))
-        setattr(tensor, "pow", self._hook_to_op(tensor, "pow"))
-        setattr(tensor, "exp", self._hook_to_op(tensor, "exp"))
-        setattr(tensor, "log", self._hook_to_op(tensor, "log"))
-        setattr(tensor, "mean", self._hook_to_op(tensor, "mean"))
-        setattr(tensor, "max", self._hook_to_op(tensor, "max"))
-        setattr(tensor, "abs", self._hook_to_op(tensor, "abs"))
-        setattr(tensor, "neg", self._hook_to_op(tensor, "neg"))
-        setattr(tensor, "clamp", self._hook_to_op(tensor, "clamp"))
-        setattr(tensor, "add", self._hook_to_op(tensor, "add"))
-        setattr(tensor, "broadcast", self._hook_to_op(tensor, "broadcast"))
-        setattr(tensor, "_getitem", self._hook_to_op(tensor, "_getitem"))
-        setattr(tensor, "unsqueeze", self._hook_to_op(tensor, "unsqueeze"))
-        setattr(tensor, "concat", self._hook_to_op(tensor, "concat"))
-        setattr(tensor, "flatten", self._hook_to_op(tensor, "flatten"))
+        _hook = self._hook_to_op
+        bound_ops = {
+            "matmul", "mul", "div", "sum", "sub", "pow", "exp", "log", "mean",
+            "max", "abs", "neg", "clamp", "add", "broadcast", "_getitem",
+            "unsqueeze", "concat", "flatten"
+        }
+        setattr_func = setattr
+        for op in bound_ops:
+            setattr_func(tensor, op, _hook(tensor, op))
 
     def _hook_to_op(self, T, op_name):
         def inner_mul(other, *args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, other, *args, **kwargs)
             if not self.no_track:
                 node = GradNode(MulOp(T, other), result)
@@ -425,7 +513,7 @@ class Autograd:
             return result
 
         def inner_div(other, *args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, other, *args, **kwargs)
             if not self.no_track:
                 node = GradNode(DivOp(T, other), result)
@@ -441,7 +529,7 @@ class Autograd:
             return result
 
         def inner_add(other, *args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, other, *args, **kwargs)
             if not self.no_track:
                 node = GradNode(AddOp(T, other), result)
@@ -457,7 +545,7 @@ class Autograd:
             return result
 
         def inner_pow(other, *args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, other, *args, **kwargs)
             if not self.no_track:
                 node = GradNode(PowOp(T, other), result)
@@ -473,7 +561,7 @@ class Autograd:
             return result
 
         def inner_exp(**kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, **kwargs)
             if not self.no_track:
                 node = GradNode(ExpOp(T), result)
@@ -487,7 +575,7 @@ class Autograd:
             return result
 
         def inner_log(other=None, *args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, other, *args, **kwargs)
             if not self.no_track:
                 if other is not None:
@@ -512,7 +600,7 @@ class Autograd:
             return result
 
         def inner_matmul(other, *args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, other, *args, **kwargs)
             if not self.no_track:
                 node = GradNode(MatMulOp(T, other), result)
@@ -528,7 +616,7 @@ class Autograd:
             return result
 
         def inner_mean(*args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, *args, **kwargs)
             if not self.no_track:
                 node = GradNode(MeanOp(T), result)
@@ -540,7 +628,7 @@ class Autograd:
             return result
 
         def inner_max(dim=None, *args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, dim, *args, **kwargs)
             if not self.no_track:
                 node = GradNode(MaxOp(T, dim), result)
@@ -552,7 +640,7 @@ class Autograd:
             return result
 
         def inner_abs(*args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, *args, **kwargs)
             if not self.no_track:
                 node = GradNode(AbsOp(T), result)
@@ -565,7 +653,7 @@ class Autograd:
             return result
 
         def inner_sum(dim, *args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, dim, *args, **kwargs)
             if not self.no_track:
                 node = GradNode(SumOp(T, dim), result)
@@ -578,7 +666,7 @@ class Autograd:
             return result
 
         def inner_sub(other, *args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, other, *args, **kwargs)
             if not self.no_track:
                 node = GradNode(SubOp(T, other), result)
@@ -594,7 +682,7 @@ class Autograd:
             return result
 
         def inner_clamp(min_value, max_value, *args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, min_value, max_value, *args, **kwargs)
             if not self.no_track:
                 node = GradNode(ClampOp(T, min_value, max_value), result)
@@ -607,7 +695,7 @@ class Autograd:
             return result
 
         def inner_broadcast(other, *args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, other, *args, **kwargs)
             if not self.no_track:
                 node = GradNode(BroadCastOp(T, other), result)
@@ -620,7 +708,7 @@ class Autograd:
             return result
 
         def inner_index(*slices, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, *slices, **kwargs)
             if not self.no_track:
                 node = GradNode(IndexOp(T, *slices), result)
@@ -634,7 +722,7 @@ class Autograd:
             return result
 
         def inner_unsqueeze(dim, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, dim, **kwargs)
             if not self.no_track:
                 node = GradNode(UnsqueezeOp(T, dim), result)
@@ -648,7 +736,7 @@ class Autograd:
             return result
 
         def inner_squeeze(dim, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, dim, **kwargs)
             if not self.no_track:
                 node = GradNode(SqueezeOp(T, dim), result)
@@ -662,7 +750,7 @@ class Autograd:
             return result
 
         def inner_concat(*tensors, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, *tensors, **kwargs)
             if not self.no_track:
                 node = GradNode(ConcatOp([T] + list(tensors), **kwargs), result)
@@ -675,7 +763,7 @@ class Autograd:
             return result
 
         def inner_flatten(dim, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, dim, **kwargs)
             if not self.no_track:
                 node = GradNode(FlattenOp(T, dim, **kwargs), result)
@@ -688,7 +776,7 @@ class Autograd:
             return result
 
         def inner_neg(*args, **kwargs):
-            org_function = getattr(copy.copy(T.__class__), op_name)
+            org_function = getattr(T.__class__, op_name)
             result = org_function(T, *args, **kwargs)
             if not self.no_track:
                 node = GradNode(NegOp(T, *args, **kwargs), result)
@@ -784,5 +872,6 @@ class Autograd:
     def zero(self):
         for t, n in self.tensor_to_node.items():
             del t.grad_node
+            t.release()
         self.no_track = True
         self.tensor_to_node.clear()
