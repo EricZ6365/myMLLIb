@@ -1,19 +1,126 @@
 import os
 import sys
 import ctypes
+from functools import reduce
+from operator import mul
 from pathlib import Path
-bin_op_sig = ((ctypes.POINTER(ctypes.c_int),
-              ctypes.POINTER(ctypes.c_int),
-              ctypes.POINTER(ctypes.c_int),
-              ctypes.c_int),
-              None)
+
+
+def bin_op_wrap(func):
+    def inner(a, b, dim):
+        # Assume a, b are Python lists of integers
+        total = len(a)
+
+        ArrayType = ctypes.c_float * total
+        out_arr = ArrayType()
+
+        func(a, b, total, dim, out_arr)
+        return out_arr
+
+    return inner
+
+def unary_op_wrap(func):
+    def inner(a, dim):
+        total = len(a)
+
+        ArrayType = ctypes.c_float * total
+        out_arr = ArrayType()
+
+        func(a, total, dim, out_arr)
+
+        return out_arr
+    return inner
+
+def broadcast_op_wrap(func):
+    def inner(a, shape_a, shape_out):
+        dim = len(shape_a)
+        ShapeType = ctypes.c_int * dim
+        shape_a_arr = ShapeType(*shape_a)
+        shape_out_arr = ShapeType(*shape_out)
+        OutType = ctypes.c_float * reduce(mul, shape_out, 1)
+        out_arr = OutType()
+        func(a, shape_a_arr, shape_out_arr, out_arr, dim)
+
+        return out_arr
+
+    return inner
+
+def matmul_op_wrap(func):
+    def inner(a, b, shape_a, shape_b):
+        dim = len(shape_a)
+        assert len(shape_a) == len(shape_b)
+        assert shape_a[-1] == shape_b[-2]
+        if len(shape_a) > 2:
+            assert shape_a[:-2] == shape_b[:-2]
+
+        ShapeType = ctypes.c_int * dim
+        shape_a_arr = ShapeType(*shape_a)
+        shape_b_arr = ShapeType(*shape_b)
+        shape_out_arr = ShapeType()
+
+        batch = 1
+        for i in range(dim - 2):
+            batch *= shape_a[i]
+        m = shape_a[dim - 2]
+        n = shape_b[dim - 1]
+        total_out = batch * m * n
+
+        OutType = ctypes.c_float * total_out
+        out_arr = OutType()
+
+        func(a, b, shape_a_arr, shape_b_arr, shape_out_arr, out_arr, dim)
+        return out_arr
+    return inner
+
+bin_op_sig = ((ctypes.POINTER(ctypes.c_float),
+               ctypes.POINTER(ctypes.c_float),
+               ctypes.c_int,
+               ctypes.c_int,
+               ctypes.POINTER(ctypes.c_float)),
+               None)
+
+unary_op_sig = ((ctypes.POINTER(ctypes.c_float),
+               ctypes.c_int,
+               ctypes.c_int,
+               ctypes.POINTER(ctypes.c_float)),
+               None)
+
+matmul_op_sig = ((
+    ctypes.POINTER(ctypes.c_float),
+    ctypes.POINTER(ctypes.c_float),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_float),
+    ctypes.c_int
+), None)
+
+broadcast_op_sig = ((
+    ctypes.POINTER(ctypes.c_float),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_float),
+    ctypes.c_int
+), None)
+
 names = [
-    ["add", *bin_op_sig],
-    ["sub", *bin_op_sig],
-    ["div", *bin_op_sig],
-    ["mul", *bin_op_sig]
+    ["add", *bin_op_sig, bin_op_wrap],
+    ["sub", *bin_op_sig, bin_op_wrap],
+    ["div", *bin_op_sig, bin_op_wrap],
+    ["mul", *bin_op_sig, bin_op_wrap],
+    ["log", *bin_op_sig, bin_op_wrap],
+    ["pow", *bin_op_sig, bin_op_wrap],
+    ["matmul", *matmul_op_sig, matmul_op_wrap],
+    ["broadcast", *broadcast_op_sig, broadcast_op_wrap],
+    ["neg", *unary_op_sig, unary_op_wrap],
+    ["ln", *unary_op_sig, unary_op_wrap],
+    ["abs", *unary_op_sig, unary_op_wrap],
+    ["exp", *unary_op_sig, unary_op_wrap]
 ]
+
+c_func = {}
 base_dir = "build"
+
 
 def load_clib(lib_name, directory="."):
     ext = {
@@ -38,21 +145,12 @@ def load_clib(lib_name, directory="."):
 
     return ctypes.CDLL(str(lib_path))
 
+
 os.makedirs(base_dir, exist_ok=True)
 
 lib = load_clib("c_utils", base_dir)
-for name, arg_types, res_type in names:
+for name, arg_types, res_type, wrap in names:
     function = getattr(lib, name + "_py")
     function.argtypes = arg_types
     function.restype = res_type
-
-    a = (ctypes.c_int * 3)(1, 2, 3)
-    b = (ctypes.c_int * 3)(1, 2, 3)
-    out = (ctypes.c_int * 3)()
-    shape = (ctypes.c_int * 1)(3)
-    dim=1
-    function(a, b, shape, dim, out)
-    for i in range(3):
-        print(out[i])
-
-
+    c_func[name] = wrap(function)

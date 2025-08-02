@@ -1,12 +1,11 @@
-import copy
-import math
-import random
-
-from matplotlib import pyplot as plt
-
-import visualize
+import ctypes
+import weakref
 from Tensor import Tensor
 
+def _make_bound(org_function, grad, op_name, tensor):
+    def bound_method(*args, **kwargs):
+        return getattr(grad, "inner_" + op_name)(tensor, org_function, *args, **kwargs)
+    return bound_method
 
 def _matmul_derv(grad_output, a, b):
     return (
@@ -177,6 +176,7 @@ class SumOp:
 
         for ax in dim:
             grad_shape[ax] = 1
+
         reshaped_grad = grad_output
         reshaped_grad.shape = tuple(grad_shape)
         reshaped_grad.stride = reshaped_grad.compute_stride(reshaped_grad.shape)
@@ -228,7 +228,7 @@ class MaxOp:
             out_shape = list(shape)
             out_shape[dim] = 1
 
-            grad_input_data = [0.0] * size
+            grad_input_data = (ctypes.c_float * size)()
 
             block_size = shape[dim]
             num_blocks = size // block_size
@@ -483,24 +483,97 @@ class Autograd:
     def init_one_tensor(self, tensor):
         self.bind_one_tensor(tensor)
         setattr(tensor, "grad_node", GradNode(None, None))
-
     def bind_one_tensor(self, tensor):
-        _hook = self._hook_to_op
         bound_ops = {
             "matmul", "mul", "div", "sum", "sub", "pow", "exp", "log", "mean",
-            "max", "abs", "neg", "clamp", "add", "broadcast", "_getitem",
+            "max", "abs", "neg", "clamp", "add", "broadcast", "index",
             "unsqueeze", "concat", "flatten"
         }
-        setattr_func = setattr
         for op in bound_ops:
-            setattr_func(tensor, op, _hook(tensor, op))
+            org_function = getattr(tensor.__class__, op)
+            grad = self
+            op_name = op
 
-    def _hook_to_op(self, T, op_name):
-        def inner_mul(other, *args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, other, *args, **kwargs)
-            if not self.no_track:
-                node = GradNode(MulOp(T, other), result)
+            setattr(tensor, op, _make_bound(org_function, grad, op_name, tensor))
+
+    def inner_mul(self, T, org_function, other):
+        result = org_function(T, other)
+        if not self.no_track:
+            node = GradNode(MulOp(T, other), result)
+            result.grad_node = node
+
+            node.children.append(T.grad_node)
+            if isinstance(other, Tensor):
+                node.children.append(other.grad_node)
+
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
+            result.grad_node = node
+        return result
+
+    def inner_div(self, T, org_function, other):
+        result = org_function(T, other)
+        if not self.no_track:
+            node = GradNode(DivOp(T, other), result)
+            result.grad_node = node
+
+            node.children.append(T.grad_node)
+            if isinstance(other, Tensor):
+                node.children.append(other.grad_node)
+
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
+            result.grad_node = node
+        return result
+
+    def inner_add(self, T, org_function, other):
+        result = org_function(T, other)
+        if not self.no_track:
+            node = GradNode(AddOp(T, other), result)
+            result.grad_node = node
+
+            node.children.append(T.grad_node)
+            if isinstance(other, Tensor):
+                node.children.append(other.grad_node)
+
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
+            result.grad_node = node
+        return result
+
+    def inner_pow(self, T, org_function, other):
+        result = org_function(T, other)
+        if not self.no_track:
+            node = GradNode(PowOp(T, other), result)
+            result.grad_node = node
+
+            node.children.append(T.grad_node)
+            if isinstance(other, Tensor):
+                node.children.append(other.grad_node)
+
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
+            result.grad_node = node
+        return result
+
+    def inner_exp(self, T, org_function):
+        result = org_function(T, )
+        if not self.no_track:
+            node = GradNode(ExpOp(T), result)
+            result.grad_node = node
+
+            node.children.append(T.grad_node)
+
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
+
+        return result
+
+    def inner_log(self, T, org_function, other=None):
+        result = org_function(T, other)
+        if not self.no_track:
+            if other is not None:
+                node = GradNode(LogOp(T, other), result)
                 result.grad_node = node
 
                 node.children.append(T.grad_node)
@@ -510,350 +583,198 @@ class Autograd:
                 self.bind_one_tensor(result)
                 self.tensor_to_node[result] = node
                 result.grad_node = node
-            return result
-
-        def inner_div(other, *args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, other, *args, **kwargs)
-            if not self.no_track:
-                node = GradNode(DivOp(T, other), result)
+            else:
+                node = GradNode(LnOp(T), result)
                 result.grad_node = node
 
                 node.children.append(T.grad_node)
-                if isinstance(other, Tensor):
-                    node.children.append(other.grad_node)
-
                 self.bind_one_tensor(result)
                 self.tensor_to_node[result] = node
                 result.grad_node = node
-            return result
-
-        def inner_add(other, *args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, other, *args, **kwargs)
-            if not self.no_track:
-                node = GradNode(AddOp(T, other), result)
-                result.grad_node = node
-
-                node.children.append(T.grad_node)
-                if isinstance(other, Tensor):
-                    node.children.append(other.grad_node)
-
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
-                result.grad_node = node
-            return result
-
-        def inner_pow(other, *args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, other, *args, **kwargs)
-            if not self.no_track:
-                node = GradNode(PowOp(T, other), result)
-                result.grad_node = node
-
-                node.children.append(T.grad_node)
-                if isinstance(other, Tensor):
-                    node.children.append(other.grad_node)
-
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
-                result.grad_node = node
-            return result
-
-        def inner_exp(**kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, **kwargs)
-            if not self.no_track:
-                node = GradNode(ExpOp(T), result)
-                result.grad_node = node
-
-                node.children.append(T.grad_node)
-
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
-
-            return result
-
-        def inner_log(other=None, *args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, other, *args, **kwargs)
-            if not self.no_track:
-                if other is not None:
-                    node = GradNode(LogOp(T, other), result)
-                    result.grad_node = node
-
-                    node.children.append(T.grad_node)
-                    if isinstance(other, Tensor):
-                        node.children.append(other.grad_node)
-
-                    self.bind_one_tensor(result)
-                    self.tensor_to_node[result] = node
-                    result.grad_node = node
-                else:
-                    node = GradNode(LnOp(T), result)
-                    result.grad_node = node
-
-                    node.children.append(T.grad_node)
-                    self.bind_one_tensor(result)
-                    self.tensor_to_node[result] = node
-                    result.grad_node = node
-            return result
-
-        def inner_matmul(other, *args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, other, *args, **kwargs)
-            if not self.no_track:
-                node = GradNode(MatMulOp(T, other), result)
-                result.grad_node = node
-
-                node.children.append(T.grad_node)
-                if isinstance(other, Tensor):
-                    node.children.append(other.grad_node)
-
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
-                result.grad_node = node
-            return result
-
-        def inner_mean(*args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, *args, **kwargs)
-            if not self.no_track:
-                node = GradNode(MeanOp(T), result)
-                result.grad_node = node
-                node.children.append(T.grad_node)
-
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
-            return result
-
-        def inner_max(dim=None, *args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, dim, *args, **kwargs)
-            if not self.no_track:
-                node = GradNode(MaxOp(T, dim), result)
-                result.grad_node = node
-                node.children.append(T.grad_node)
-
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
-            return result
-
-        def inner_abs(*args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, *args, **kwargs)
-            if not self.no_track:
-                node = GradNode(AbsOp(T), result)
-                result.grad_node = node
-                node.children.append(T.grad_node)
-
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
+        return result
+
+    def inner_matmul(self, T, org_function, other):
+        result = org_function(T, other)
+        if not self.no_track:
+            node = GradNode(MatMulOp(T, other), result)
+            result.grad_node = node
+
+            node.children.append(T.grad_node)
+            if isinstance(other, Tensor):
+                node.children.append(other.grad_node)
+
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
+            result.grad_node = node
+        return result
+
+    def inner_mean(self, T, org_function):
+        result = org_function(T)
+        if not self.no_track:
+            node = GradNode(MeanOp(T), result)
+            result.grad_node = node
+            node.children.append(T.grad_node)
+
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
+        return result
+
+    def inner_max(self, T, org_function, dim=None, ):
+        result = org_function(T, dim)
+        if not self.no_track:
+            node = GradNode(MaxOp(T, dim), result)
+            result.grad_node = node
+            node.children.append(T.grad_node)
+
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
+        return result
+
+    def inner_abs(self, T, org_function, ):
+        result = org_function(T, )
+        if not self.no_track:
+            node = GradNode(AbsOp(T), result)
+            result.grad_node = node
+            node.children.append(T.grad_node)
+
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
 
-            return result
-
-        def inner_sum(dim, *args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, dim, *args, **kwargs)
-            if not self.no_track:
-                node = GradNode(SumOp(T, dim), result)
-                result.grad_node = node
-                node.children.append(T.grad_node)
-
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
+        return result
 
-            return result
-
-        def inner_sub(other, *args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, other, *args, **kwargs)
-            if not self.no_track:
-                node = GradNode(SubOp(T, other), result)
-                result.grad_node = node
-
-                node.children.append(T.grad_node)
-                if isinstance(other, Tensor):
-                    node.children.append(other.grad_node)
-
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
-
-            return result
-
-        def inner_clamp(min_value, max_value, *args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, min_value, max_value, *args, **kwargs)
-            if not self.no_track:
-                node = GradNode(ClampOp(T, min_value, max_value), result)
-                result.grad_node = node
-                node.children.append(T.grad_node)
-
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
-
-            return result
-
-        def inner_broadcast(other, *args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, other, *args, **kwargs)
-            if not self.no_track:
-                node = GradNode(BroadCastOp(T, other), result)
-                result.grad_node = node
+    def inner_sum(self, T, org_function, dim, ):
+        result = org_function(T, dim)
+        if not self.no_track:
+            node = GradNode(SumOp(T, dim), result)
+            result.grad_node = node
+            node.children.append(T.grad_node)
 
-                node.children.append(T.grad_node)
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
 
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
-            return result
+        return result
 
-        def inner_index(*slices, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, *slices, **kwargs)
-            if not self.no_track:
-                node = GradNode(IndexOp(T, *slices), result)
-                result.grad_node = node
+    def inner_sub(self, T, org_function, other, ):
+        result = org_function(T, other)
+        if not self.no_track:
+            node = GradNode(SubOp(T, other), result)
+            result.grad_node = node
 
-                node.children.append(T.grad_node)
+            node.children.append(T.grad_node)
+            if isinstance(other, Tensor):
+                node.children.append(other.grad_node)
 
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
 
-            return result
+        return result
 
-        def inner_unsqueeze(dim, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, dim, **kwargs)
-            if not self.no_track:
-                node = GradNode(UnsqueezeOp(T, dim), result)
-                result.grad_node = node
+    def inner_clamp(self, T, org_function, min_value, max_value, ):
+        result = org_function(T, min_value, max_value)
+        if not self.no_track:
+            node = GradNode(ClampOp(T, min_value, max_value), result)
+            result.grad_node = node
+            node.children.append(T.grad_node)
 
-                node.children.append(T.grad_node)
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
 
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
+        return result
 
-            return result
+    def inner_broadcast(self, T, org_function, other, ):
+        result = org_function(T, other)
+        if not self.no_track:
+            node = GradNode(BroadCastOp(T, other), result)
+            result.grad_node = node
 
-        def inner_squeeze(dim, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, dim, **kwargs)
-            if not self.no_track:
-                node = GradNode(SqueezeOp(T, dim), result)
-                result.grad_node = node
+            node.children.append(T.grad_node)
 
-                node.children.append(T.grad_node)
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
+        return result
 
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
+    def inner_index(self, T, org_function, *slices):
+        result = org_function(T, *slices)
+        if not self.no_track:
+            node = GradNode(IndexOp(T, *slices), result)
+            result.grad_node = node
 
-            return result
+            node.children.append(T.grad_node)
 
-        def inner_concat(*tensors, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, *tensors, **kwargs)
-            if not self.no_track:
-                node = GradNode(ConcatOp([T] + list(tensors), **kwargs), result)
-                result.grad_node = node
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
 
-                node.children.append(T.grad_node)
+        return result
 
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
-            return result
+    def inner_unsqueeze(self, T, org_function, dim):
+        result = org_function(T, dim)
+        if not self.no_track:
+            node = GradNode(UnsqueezeOp(T, dim), result)
+            result.grad_node = node
 
-        def inner_flatten(dim, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, dim, **kwargs)
-            if not self.no_track:
-                node = GradNode(FlattenOp(T, dim, **kwargs), result)
-                result.grad_node = node
+            node.children.append(T.grad_node)
 
-                node.children.append(T.grad_node)
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
 
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
-            return result
+        return result
 
-        def inner_neg(*args, **kwargs):
-            org_function = getattr(T.__class__, op_name)
-            result = org_function(T, *args, **kwargs)
-            if not self.no_track:
-                node = GradNode(NegOp(T, *args, **kwargs), result)
-                result.grad_node = node
+    def inner_squeeze(self, T, org_function, dim, ):
+        result = org_function(T, dim)
+        if not self.no_track:
+            node = GradNode(SqueezeOp(T, dim), result)
+            result.grad_node = node
 
-                node.children.append(T.grad_node)
+            node.children.append(T.grad_node)
 
-                self.bind_one_tensor(result)
-                self.tensor_to_node[result] = node
-            return result
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
 
-        if op_name == "matmul":
-            return inner_matmul
+        return result
 
-        elif op_name == "sum":
-            return inner_sum
+    def inner_concat(self, T, org_function, *tensors, dim):
+        result = org_function(T, *tensors, dim=dim)
+        if not self.no_track:
+            node = GradNode(ConcatOp([T] + list(tensors), dim), result)
+            result.grad_node = node
 
-        elif op_name == "max":
-            return inner_max
+            node.children.append(T.grad_node)
 
-        elif op_name == "mul":
-            return inner_mul
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
 
-        elif op_name == "div":
-            return inner_div
+        return result
 
-        elif op_name == "sub":
-            return inner_sub
+    def inner_flatten(self, T, org_function, dim):
+        result = org_function(T, dim)
+        if not self.no_track:
+            node = GradNode(FlattenOp(T, dim), result)
+            result.grad_node = node
 
-        elif op_name == "mean":
-            return inner_mean
+            node.children.append(T.grad_node)
 
-        elif op_name == "abs":
-            return inner_abs
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
+        return result
 
-        elif op_name == "clamp":
-            return inner_clamp
+    def inner_neg(self, T, org_function):
+        result = org_function(T)
+        if not self.no_track:
+            node = GradNode(NegOp(T), result)
+            result.grad_node = node
 
-        elif op_name == "add":
-            return inner_add
+            node.children.append(T.grad_node)
 
-        elif op_name == "broadcast":
-            return inner_broadcast
+            self.bind_one_tensor(result)
+            self.tensor_to_node[result] = node
+        return result
 
-        elif op_name == "_getitem":
-            return inner_index
-
-        elif op_name == "unsqueeze":
-            return inner_unsqueeze
-
-        elif op_name == "squeeze":
-            return inner_squeeze
-
-        elif op_name == "concat":
-            return inner_concat
-
-        elif op_name == "flatten":
-            return inner_flatten
-
-        elif op_name == "pow":
-            return inner_pow
-
-        elif op_name == "log":
-            return inner_log
-
-        elif op_name == "neg":
-            return inner_neg
-
-        elif op_name == "exp":
-            return inner_exp
-
-    def backward(self, loss_scalar, final_tensor):
+    def backward(self, loss_scaler, final_tensor):
         if not hasattr(final_tensor, "grad_node"):
             raise ValueError("Final tensor has no grad_node")
 
         self.no_track = True
-        final_tensor.grad_node.grad_a = loss_scalar
+        final_tensor.grad_node.grad_a = loss_scaler
 
         queue = [final_tensor.grad_node]
         visited = set()
@@ -872,6 +793,7 @@ class Autograd:
     def zero(self):
         for t, n in self.tensor_to_node.items():
             del t.grad_node
+            del t.data
             t.release()
         self.no_track = True
         self.tensor_to_node.clear()

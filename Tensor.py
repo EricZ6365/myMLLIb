@@ -1,9 +1,14 @@
-import math
+import ctypes
 import random
+import weakref
+
+from binding import c_func
 from functools import reduce
 from operator import mul
 
-import visualize
+class Pool:
+    pool = set()
+    in_use = weakref.WeakSet()
 
 _eps = 1e-12
 
@@ -15,30 +20,30 @@ class Tensor:
         "grad_node",
         "stride",
         "velocity",
+        "__weakref__",
         "__dict__",
     ]
 
-    pool = set()
-    in_use = set()
-
     def __new__(cls, *args, **kwargs):
-        if cls.pool:
-            tensor = cls.pool.pop()
+        if len(Pool.pool) > 0:
+            tensor = Pool.pool.pop()
         else:
-            tensor = super().__new__(cls)
-        cls.in_use.add(tensor)
+            tensor = super().__new__(Tensor)
 
+        Pool.in_use.add(tensor)
         return tensor
 
     def release(self):
-        if self in self.__class__.in_use:
-            self.__class__.in_use.remove(self)
-            self.__class__.pool.add(self)
+        if self in Pool.in_use:
+            Pool.in_use.remove(self)
+            Pool.pool.add(self)
         else:
             print("Tensor not in use, cannot release")
 
+        if hasattr(self, "data"):
+            del self.data
     def __init__(self, data, require_grad=True):
-        self.data = self.flat(data)
+        self.data = self.to_c(self.flat(data))
         self.shape = self._get_shape(data)
         assert len(self.data) == reduce(mul, self.shape, 1)
         self.require_grad = require_grad
@@ -51,6 +56,10 @@ class Tensor:
         return res
 
     @staticmethod
+    def to_c(data):
+        return (ctypes.c_float * len(data))(*data)
+
+    @staticmethod
     def flat(data):
         res = []
         if isinstance(data, (int, float)):
@@ -59,10 +68,15 @@ class Tensor:
             for li in data:
                 res.extend(Tensor.flat(li))
         return res
+
     @staticmethod
     def randn(*sizes, require_grad=True):
         randn_tensor = Tensor.__new__(Tensor)
-        randn_tensor.data  = [random.normalvariate() for i in range(reduce(mul, sizes, 1))]
+        total = reduce(mul, sizes, 1)
+        out = (ctypes.c_float * total)()
+        for i in range(total):
+            out[i] = random.normalvariate()
+        randn_tensor.data  = out
         randn_tensor.shape = sizes
         randn_tensor.shape = sizes
         randn_tensor.stride = Tensor.compute_stride(sizes)
@@ -72,7 +86,11 @@ class Tensor:
     @staticmethod
     def rand(*sizes, require_grad=True):
         randn_tensor = Tensor.__new__(Tensor)
-        randn_tensor.data = [random.random() for i in range(reduce(mul, sizes, 1))]
+        total = reduce(mul, sizes, 1)
+        out = (ctypes.c_float * total)()
+        for i in range(total):
+            out[i] = random.random()
+        randn_tensor.data = out
         randn_tensor.shape = sizes
         randn_tensor.stride = Tensor.compute_stride(sizes)
         randn_tensor.require_grad = require_grad
@@ -81,7 +99,11 @@ class Tensor:
     @staticmethod
     def zeros(*sizes, require_grad=True):
         randn_tensor = Tensor.__new__(Tensor)
-        randn_tensor.data = [0 for i in range(reduce(mul, sizes, 1))]
+        total = reduce(mul, sizes, 1)
+        out =  (ctypes.c_float * total)()
+        for i in range(total):
+            out[i] = 0.
+        randn_tensor.data = out
         randn_tensor.shape = sizes
         randn_tensor.stride = Tensor.compute_stride(sizes)
         randn_tensor.require_grad = require_grad
@@ -112,30 +134,29 @@ class Tensor:
 
         return self.grad_node.grad_a
     def __repr__(self):
-        return f"Tensor(shape={self.shape}, data={self.data})"
+        return f"Tensor(shape={self.shape}, data_length={len(self.data)}, data={list(self.data[:5]) if len(self.data) > 5 else list(self.data)})"
 
     def __matmul__(self, other):
         return self.matmul(other)
 
     def matmul(self, other):
-        assert len(self.shape) == 2 and len(other.shape) == 2, "Only 2D matmul supported"
-        assert self.shape[1] == other.shape[0], (f"Shapes not aligned for matmul "
-                                                 f"source shape: {self.shape}, other shape: {other.shape}")
+        assert self.shape[-1] == other.shape[-2], (
+            f"Shapes not aligned for matmul: {self.shape} x {other.shape}"
+        )
 
-        out_rows, out_cols = self.shape[0], other.shape[1]
-        result_data = [0] * (out_rows * out_cols)
+        # [*, M, K] x [*, K, N] => [*, M, N]
+        m = self.shape[-2]
+        n = other.shape[-1]
 
-        for i in range(out_rows):
-            for j in range(out_cols):
-                val = 0
-                for k in range(self.shape[1]):
-                    val += self.data[i * self.shape[1] + k] * other.data[k * other.shape[1] + j]
-                result_data[i * out_cols + j] = val
+        batch_shape = self.shape[:-2] if len(self.shape) > 2 else []
+        result_shape = tuple(batch_shape + [m, n])
+
+        out_data = c_func["matmul"](self.data, other.data, self.shape, other.shape)
 
         result = Tensor.__new__(Tensor)
-        result.data = result_data
-        result.shape = (out_rows, out_cols)
-        result.stride = result.compute_stride(result.shape)
+        result.data = out_data
+        result.shape = result_shape
+        result.stride = Tensor.compute_stride(result.shape)
         result.require_grad = self.require_grad or other.require_grad
         return result
 
@@ -146,7 +167,7 @@ class Tensor:
         new_shape[dim1], new_shape[dim2] = new_shape[dim2], new_shape[dim1]
         new_stride = list(self.stride)
         new_stride[dim1], new_stride[dim2] = new_stride[dim2], new_stride[dim1]
-        new_data = [0] * len(self.data)
+        new_data = (ctypes.c_float * len(self.data))()
 
         def unravel_index(idx, shape):
             res = []
@@ -186,6 +207,8 @@ class Tensor:
 
 
     def squeeze(self, dim):
+        if dim < 0:
+            dim += len(self.shape)
         if self.shape[dim] == 1:
             result = Tensor.__new__(Tensor)
             result.data = self.data
@@ -196,7 +219,7 @@ class Tensor:
         else:
             raise IndexError(f"dim {dim} is not singleton")
 
-    def _getitem(self, *slices):
+    def index(self, *slices):
         if len(slices) == 1 and isinstance(slices[0], tuple):
             slices = slices[0]
         full_slices = list(slices) + [slice(None)] * (len(self.shape) - len(slices))
@@ -218,7 +241,6 @@ class Tensor:
             else:
                 raise IndexError("invalid index: ", s)
             norm_slices.append(slice(start, stop, step))
-
         def rec(i, offset):
             if i == len(norm_slices):
                 return [self.data[offset]]
@@ -227,7 +249,7 @@ class Tensor:
             acc = []
             for j in range(s.start, s.stop, step):
                 acc.extend(rec(i + 1, offset + j * self.stride[i]))
-            return acc
+            return (ctypes.c_float * len(acc))(*acc)
 
         result = Tensor.__new__(Tensor)
         result.data = rec(0, 0)
@@ -297,36 +319,37 @@ class Tensor:
         rec(0, 0, 0)
 
     def neg(self):
-        return self._unary_op(lambda x: -x)
+        return self._unary_op(c_func["neg"])
 
     def abs(self):
-        return self._unary_op(abs)
+        return self._unary_op(c_func["abs"])
 
     def exp(self):
-        return self._unary_op(math.exp)
+        return self._unary_op(c_func["exp"])
 
     def _unary_op(self, func):
         result = Tensor.__new__(Tensor)
-        result.data = [func(x) for x in self.data]
+        result.data = func(self.data, len(self.shape))
 
         result.shape = self.shape
         result.stride = self.compute_stride(self.shape)
         result.require_grad = self.require_grad
         return result
 
-    def __pow__(self, power, modulo=None): self._bind_broadcast(power, "pow")
+    def __pow__(self, power, modulo=None): return self._bind_broadcast(power, "pow")
     def __neg__(self): return self.neg()
     def __abs__(self): return self.abs()
     def __add__(self, other): return self._bind_broadcast(other, "add")
     def __sub__(self, other): return self._bind_broadcast(other, "sub")
     def __mul__(self, other): return self._bind_broadcast(other, "mul")
     def __truediv__(self, other): return self._bind_broadcast(other, "div")
-    def __getitem__(self, *args, **kwargs): return self._getitem(*args)
+    def __getitem__(self, *args, **kwargs): return self.index(*args)
     def __setitem__(self, key, value): return self._setitem(key, value)
 
     @staticmethod
     def _bi_broadcast(a, b, op_name):
         func = getattr(a, op_name)
+
         if not isinstance(b, Tensor) or a.shape == b.shape:
             return func(b)
 
@@ -352,49 +375,45 @@ class Tensor:
 
             return a, b
         a_norm, b_norm = _inner(a, b)
-        return func(b_norm)
+        return getattr(a_norm, op_name)(b_norm)
 
     def _bind_broadcast(self, other, op_name):
         return Tensor._bi_broadcast(self, other, op_name)
 
-
     def add(self, other):
-
-        return self._binary_op(other, lambda a, b: a + b)
+        return self._binary_op(other, c_func["add"])
 
     def sub(self, other):
-        return self._binary_op(other, lambda a, b: a - b)
+        return self._binary_op(other, c_func["sub"])
 
     def mul(self, other):
-        return self._binary_op(other, lambda a, b: a * b)
+        return self._binary_op(other,  c_func["mul"])
 
     def div(self, other):
-        return self._binary_op(other, lambda a, b: a / b if b != 0 else 1.)
+        return self._binary_op(other,  c_func["div"])
 
     def pow(self, other):
-        return self._binary_op(other, lambda a, b: a ** b)
+        return self._binary_op(other, c_func["pow"])
 
     def log(self, other=None):
         if other is None:
-            return self._unary_op(lambda a: math.log(max(a, 1e-6)))  # natural log
+            return self._unary_op(c_func["ln"])
+        safe_data = self.clamp(1e-6, float("inf"))
 
         if not hasattr(other, "shape"):
-            safe_data = self.clamp(1e-6, float("inf"))
-            return safe_data._unary_op(lambda a: math.log(a) / math.log(other))
+            return safe_data._binary_op(other, c_func["log"])
 
-        safe_data = self.clamp(1e-6, float("inf"))
-        return safe_data._binary_op(other, lambda a, b: math.log(a) / math.log(max(b, 1e-6)))
+        return safe_data._binary_op(other, c_func["log"])
 
     def broadcast(self, shape):
         shape_self = list(self.shape)
         shape_other = list(shape)
-        ndim_self = len(shape_self)
-        ndim_other = len(shape_other)
 
-        if ndim_self < ndim_other:
-            shape_self = shape_self + [1] * (ndim_other - ndim_self)
-        elif ndim_other < ndim_self:
-            shape_other = shape_other + [1] * (ndim_self - ndim_other)
+        len_diff = len(shape_other) - len(shape_self)
+        if len_diff > 0:
+            shape_self = shape_self + [1] * len_diff
+        elif len_diff < 0:
+            shape_other = shape_other + [1] * (-len_diff)
 
         out_shape = []
         for s, o in zip(shape_self, shape_other):
@@ -403,28 +422,9 @@ class Tensor:
             else:
                 raise ValueError(f"Incompatible broadcast shapes: {self.shape} and {shape}")
 
-        def expand_data(data, shape, out_shape):
-            if shape == out_shape:
-                return data
-            if len(shape) == 1:
-                if shape[0] == 1:
-                    return data * out_shape[0]
-                return data
-            size = shape[0]
-            sub_shape = shape[1:]
-            sub_out_shape = out_shape[1:]
-            expanded_subs = []
-            sub_size = len(data) // size
-            for i in range(size):
-                sub_data = data[i * sub_size:(i + 1) * sub_size]
-                expanded_subs.append(expand_data(sub_data, sub_shape, sub_out_shape))
-            expanded_data = expanded_subs * (out_shape[0] // size)
-            return [item for sub in expanded_data for item in sub]
-
-        new_data = expand_data(self.data, shape_self, out_shape)
-
+        out_data = c_func["broadcast"](self.data, shape_self, out_shape)
         result = Tensor.__new__(Tensor)
-        result.data = new_data
+        result.data = out_data
         result.shape = tuple(out_shape)
         result.stride = self.compute_stride(result.shape)
         result.require_grad = self.require_grad
@@ -433,16 +433,17 @@ class Tensor:
     def _binary_op(self, other, func):
         result = Tensor.__new__(Tensor)
 
-        def apply_func(a, b):
-            return func(a, b)
+        def apply_func(a, b, a_dim):
+            return func(a, b, a_dim)
 
         if isinstance(other, Tensor):
             if self.shape == other.shape:
-                result.data = [apply_func(a, b) for a, b in zip(self.data, other.data)]
+                result.data = apply_func(self.data, other.data, len(self.data))
             else:
                 raise ValueError(f"Incompatible broadcast shapes: {self.shape} and {other.shape}")
         else:
-            result.data = [apply_func(a, other) for a in self.data]
+            total = reduce(mul, self.shape, 1)
+            result.data = apply_func(self.data, (ctypes.c_float * total)(*([other] * total)), len(self.shape))
 
         result.require_grad = self.require_grad
         result.shape = self.shape
@@ -452,7 +453,7 @@ class Tensor:
     def sum(self, dim=None):
         if dim is None:
             result = Tensor.__new__(Tensor)
-            result.data = [sum(self.data)]
+            result.data = (ctypes.c_float * 1)(*(sum(self.data), ))
             result.shape = ()
             result.stride = ()
             result.require_grad = self.require_grad
@@ -473,15 +474,12 @@ class Tensor:
         for s in self.shape[:dim]:
             outer_block *= s
 
-        result_data = []
-        for outer in range(outer_block):
-            base = outer * dim_size * inner_block
-            for inner in range(inner_block):
-                val = 0
-                for a in range(dim_size):
-                    val += self.data[base + a * inner_block + inner]
-                result_data.append(val)
-
+        result_data = (ctypes.c_float * (len(self.data) // dim_size))()
+        for i in range(outer_block):
+            for j in range(0, inner_block, dim_size):
+                start = i * inner_block + j
+                block = self.data[start:start + dim_size]
+                result_data[start // dim_size] = sum(block)
         result = Tensor.__new__(Tensor)
         result.data = result_data
         result.shape = tuple(new_shape) if new_shape else ()
@@ -491,7 +489,7 @@ class Tensor:
 
     def mean(self):
         result = Tensor.__new__(Tensor)
-        result.data = [sum(self.data) / len(self.data)]
+        result.data = (ctypes.c_float * 1)(sum(self.data) / len(self.data))
         result.shape = ()
         result.stride = ()
         result.require_grad = self.require_grad
@@ -503,7 +501,7 @@ class Tensor:
     def max(self, dim=None):
         result = Tensor.__new__(Tensor)
         if dim is None:
-            result.data = [max(self.data)]
+            result.data = (ctypes.c_float * 1)(max(self.data))
             result.shape = ()
             result.stride = ()
         else:
@@ -512,12 +510,12 @@ class Tensor:
             outer_size = len(self.data) // inner_block
             inner_size = inner_block // step
 
-            max_values = []
+            max_values = (ctypes.c_float * (len(self.data) // step))()
             for i in range(outer_size):
                 for j in range(0, inner_block, step):
                     start = i * inner_block + j
                     block = self.data[start:start + step]
-                    max_values.append(max(block))
+                    max_values[start // step] = max(block)
 
             result.data = max_values
             result.shape = self.shape[:dim] + self.shape[dim + 1:]
@@ -535,17 +533,17 @@ class Tensor:
         return result
 
     def clamp(self, min_value=float("-inf"), max_value=float("inf")):
-        clamped_data = []
-
-        for val in self.data:
+        total = reduce(mul, self.shape, 1)
+        out = (ctypes.c_float * total)()
+        for idx in range(total):
+            val = self.data[idx]
             if min_value is not None and val < min_value:
                 val = min_value
             if max_value is not None and val > max_value:
                 val = max_value
-            clamped_data.append(val)
-
+            out[idx] = val
         result = Tensor.__new__(Tensor)
-        result.data = clamped_data
+        result.data = out
         result.require_grad = self.require_grad
         result.shape = self.shape
         result.stride = self.stride
@@ -603,7 +601,7 @@ class Tensor:
         inner = prod(base_shape[dim + 1:]) if dim < rank - 1 else 1
 
         out_numel = prod(out_shape)
-        out_data = [0] * out_numel
+        out_data = (ctypes.c_float * out_numel)()
 
         outer_stride_out = out_shape_list[dim] * inner
         dst_base = 0
@@ -623,5 +621,3 @@ class Tensor:
         result.require_grad = any(getattr(t, "require_grad", False) for t in tensors)
 
         return result
-
-

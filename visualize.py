@@ -12,6 +12,8 @@ _op_color = {
     "SubOp": "#FF33A6",
     "AddOp": "#FF33A6",
     "MulOp": "#FF33A6",
+    "DivOp": "#FF33A6",
+
     "AbsOp": "#FF33A6",
     "PowOp": "#FF33A6",
     "LogOp": "#FF33A6",

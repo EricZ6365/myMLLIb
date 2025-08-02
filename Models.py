@@ -1,6 +1,9 @@
+import ctypes
 import math
+from typing import NewType
 
 import matplotlib.pyplot as plt
+from numba.core.datamodel import register
 
 import visualize
 from Autograd import Autograd
@@ -10,6 +13,7 @@ from Tensor import Tensor
 class Model:
     def __init__(self):
         self._tensors = []
+        self.params = {}
         forward_func = getattr(self, "forward")
         self.grad = Autograd([])
         setattr(self, "forward", self._forward_hook(forward_func))
@@ -18,10 +22,33 @@ class Model:
         self._tensors.append(T)
         self.grad.init_one_tensor(T)
 
-    def register_module(self, M):
-        for T in M._tensors:
-            self._tensors.append(T)
-            self.grad.init_one_tensor(T)
+    def register_tensors(self, Ts):
+        for T in Ts:
+            self.register_tensor(T)
+
+    def register_param(self, T, name):
+        self.params[name] = T
+        self.register_tensor(T)
+
+    def register_params(self, Ts, names):
+        for i, name in enumerate(names):
+            self.params[name] = Ts[i]
+            self.register_tensor(Ts[i])
+
+    def register_module(self, M, name):
+        self.register_tensors(M._tensors)
+        self.register_params(list(M.params.values()), list(map(lambda x: name + "." + x, M.params.keys())))
+
+    def get_state(self):
+        return {k: list(p.data) for k, p in self.params.items()}
+
+    def load_state(self, state):
+        for name, T in state.items():
+            obj = getattr(self, name.split(".")[0])
+            for path_off in name.split(".")[1:]:
+                obj = getattr(obj, path_off)
+
+            obj.data = (ctypes.c_float * len(T))(*T)
 
     def _forward_hook(self, forward_func):
         def wrap(*args, **kwargs):
@@ -38,7 +65,7 @@ class Model:
         return wrap
 
     def backward(self, loss, lr, momentum=0.9):
-        self.grad.backward(loss.value(), loss)
+        self.grad.backward(loss, loss)
         for T in self._tensors:
             if T.grad_node is None:
                 continue
@@ -46,13 +73,18 @@ class Model:
             if not hasattr(T, "velocity"):
                 T.velocity = [0.0 for _ in T.data]
 
-            new_data = []
+            new_data = (ctypes.c_float * len(T.data))()
 
             for i, (w, gw) in enumerate(zip(T.data, T.grad_node.grad_a.data)):
                 T.velocity[i] = momentum * T.velocity[i] + (1 - momentum) * gw
-                new_data.append(w - lr * T.velocity[i])
+                new_data[i] = w - lr * T.velocity[i]
             T.data = new_data
 
+    def save(self, path):
+        with open(path, "w") as f:
+            for name, value in self.params.items():
+                s = f"{name}->{str(value.data)}\n"
+                f.write(s)
 
     def zero(self):
         self.grad.zero()
@@ -60,6 +92,7 @@ class Model:
 class Module:
     def __init__(self, grad):
         self._tensors = []
+        self.params = {}
         self.grad = grad
 
     def register_tensor(self, T):
@@ -67,6 +100,15 @@ class Module:
 
     def register_tensors(self, Ts):
         self._tensors.extend(Ts)
+
+    def register_param(self, T, name):
+        self.params[name] = T
+        self.register_tensor(T)
+
+    def register_params(self, Ts, names):
+        for i, name in enumerate(names):
+            self.params[name] = Ts[i]
+        self.register_tensors(Ts)
 
     def __call__(self, *args, **kwargs):
         return getattr(self, "forward")(*args, **kwargs)
@@ -89,8 +131,8 @@ class Conv1d(Module):
         self.weight = Tensor.randn(out_c, in_c, kernel_size) / scale
         self.bias = Tensor.zeros(out_c) if bias else None
 
-        self.register_tensor(self.weight)
-        self.register_tensor(self.bias)
+        self.register_param(self.weight, "weight")
+        self.register_param(self.bias, "bias")
 
     def forward(self, x: Tensor) -> Tensor:
         B, C, L = x.shape
@@ -112,12 +154,11 @@ class Conv1d(Module):
             y = x_win.mul(Wb).sum(dim=2).sum(dim=2)  # (B, out_c)
 
             if self.bias is not None:
-                y = y.clamp(0, float("inf")) + self.bias.unsqueeze(0).broadcast((B, self.out_c))  # (B, out_c)
+                y = y.clamp(0, float("inf")) + self.bias.unsqueeze(0)
 
             # Add dimension for length
             y = y.unsqueeze(2)  # (B, out_c, 1)
             out.append(y)
-
         return out[0].concat(*out[1:], dim=2)  # (B, out_c, L_out)
 
     def visualize_output(self, x):
@@ -137,21 +178,10 @@ class Conv1d(Module):
 class Linear(Module):
     def __init__(self, grad, in_feature, out_feature):
         super().__init__(grad)
-
         self.linear = Tensor.randn(in_feature, out_feature) / math.sqrt(in_feature * out_feature)
         self.bias = Tensor.randn(1, out_feature)
-        self.register_tensor(self.linear)
-        self.register_tensor(self.bias)
+        self.register_param(self.linear, "linear")
+        self.register_param(self.bias, "bias")
 
     def forward(self, x):
-        first = None
-        tensors = []
-        if len(x.shape) == 3:
-            for i in range(x.shape[0]):
-                lin = x[i] @ self.linear
-                if first is None:
-                    first = lin
-                tensors.append(lin)
-        else:
-            return x @ self.linear + self.bias
-        return first.concat(tensors, dim=0) + self.bias
+        return x @ self.linear + self.bias
