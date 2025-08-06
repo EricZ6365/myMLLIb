@@ -8,9 +8,9 @@ class SimpleProfiler:
     def _trace(self, frame, event, arg):
         if event not in ("call", "return"):
             return self._trace
-
         code = frame.f_code
         func_name = code.co_name
+
         filename = code.co_filename
         key = (filename, func_name)
 

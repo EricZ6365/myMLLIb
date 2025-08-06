@@ -39,9 +39,8 @@ class Tensor:
             Pool.pool.add(self)
         else:
             print("Tensor not in use, cannot release")
+        del self.data
 
-        if hasattr(self, "data"):
-            del self.data
     def __init__(self, data, require_grad=True):
         self.data = self.to_c(self.flat(data))
         self.shape = self._get_shape(data)
@@ -100,10 +99,7 @@ class Tensor:
     def zeros(*sizes, require_grad=True):
         randn_tensor = Tensor.__new__(Tensor)
         total = reduce(mul, sizes, 1)
-        out =  (ctypes.c_float * total)()
-        for i in range(total):
-            out[i] = 0.
-        randn_tensor.data = out
+        randn_tensor.data = (ctypes.c_float * total)()
         randn_tensor.shape = sizes
         randn_tensor.stride = Tensor.compute_stride(sizes)
         randn_tensor.require_grad = require_grad
@@ -148,8 +144,8 @@ class Tensor:
         m = self.shape[-2]
         n = other.shape[-1]
 
-        batch_shape = self.shape[:-2] if len(self.shape) > 2 else []
-        result_shape = tuple(batch_shape + [m, n])
+        batch_shape = self.shape[:-2] if len(self.shape) > 2 else ()
+        result_shape = tuple(batch_shape + (m, n))
 
         out_data = c_func["matmul"](self.data, other.data, self.shape, other.shape)
 
@@ -165,31 +161,12 @@ class Tensor:
 
         new_shape = list(self.shape)
         new_shape[dim1], new_shape[dim2] = new_shape[dim2], new_shape[dim1]
-        new_stride = list(self.stride)
-        new_stride[dim1], new_stride[dim2] = new_stride[dim2], new_stride[dim1]
-        new_data = (ctypes.c_float * len(self.data))()
-
-        def unravel_index(idx, shape):
-            res = []
-            for s in reversed(shape):
-                res.insert(0, idx % s)
-                idx //= s
-            return res
-
-        def ravel_index(indices, stride):
-            return sum(i * s for i, s in zip(indices, stride))
-
-        for new_flat_idx in range(len(new_data)):
-            new_multi_idx = unravel_index(new_flat_idx, new_shape)
-            old_multi_idx = list(new_multi_idx)
-            old_multi_idx[dim1], old_multi_idx[dim2] = old_multi_idx[dim2], old_multi_idx[dim1]
-            old_flat_idx = ravel_index(old_multi_idx, self.stride)
-            new_data[new_flat_idx] = self.data[old_flat_idx]
+        new_data = c_func["transpose"](self.data, self.shape, dim1, dim2)
 
         result = Tensor.__new__(Tensor)
         result.data = new_data
         result.shape = tuple(new_shape)
-        result.stride = tuple(new_stride)
+        result.stride = Tensor.compute_stride(new_shape)
         result.require_grad = self.require_grad
         return result
 
@@ -241,18 +218,10 @@ class Tensor:
             else:
                 raise IndexError("invalid index: ", s)
             norm_slices.append(slice(start, stop, step))
-        def rec(i, offset):
-            if i == len(norm_slices):
-                return [self.data[offset]]
-            s = norm_slices[i]
-            step = s.step
-            acc = []
-            for j in range(s.start, s.stop, step):
-                acc.extend(rec(i + 1, offset + j * self.stride[i]))
-            return (ctypes.c_float * len(acc))(*acc)
+
 
         result = Tensor.__new__(Tensor)
-        result.data = rec(0, 0)
+        result.data = c_func["index"](self.data, self.shape, new_shape, norm_slices)
         result.shape = tuple(new_shape)
         result.stride = result.compute_stride(result.shape)
         result.require_grad = self.require_grad
@@ -356,15 +325,15 @@ class Tensor:
         def _inner(a, b):
             sa, sb = tuple(a.shape), tuple(b.shape)
             max_len = max(len(sa), len(sb))
-            for _ in range(max_len - len(sa)):
-                a = a.unsqueeze(-1)
-                sa = a.shape
+            pad_a = [1] * (max_len - len(sa))
+            pad_b = [1] * (max_len - len(sb))
 
-            for _ in range(max_len - len(sb)):
-                b = b.unsqueeze(-1)
-                sb = b.shape
+            a.shape = tuple(pad_a + list(a.shape))
+            a.stride = a.compute_stride(a.shape)
+            b.shape = tuple(pad_b + list(b.shape))
+            b.stride = b.compute_stride(b.shape)
 
-            for a_axis, b_axis in zip(sa, sb):
+            for a_axis, b_axis in zip(a.shape, b.shape):
                 if a_axis != b_axis:
                     if a_axis == 1:
                         return a.broadcast(b.shape), b
@@ -374,6 +343,7 @@ class Tensor:
                         raise ValueError(f"Incompatible broadcast shapes: {a.shape} and {b.shape}")
 
             return a, b
+
         a_norm, b_norm = _inner(a, b)
         return getattr(a_norm, op_name)(b_norm)
 
@@ -621,3 +591,34 @@ class Tensor:
         result.require_grad = any(getattr(t, "require_grad", False) for t in tensors)
 
         return result
+
+    def reshape(self, *shape):
+        out_shape = []
+        acc = 1
+        for i, _slice in enumerate(shape):
+            if _slice == -1:
+                out_shape.append(len(self.data) // acc)
+                break
+            acc *= _slice
+            out_shape.append(_slice)
+        assert len(self.data) == reduce(mul, out_shape, 1)
+
+        result = Tensor.__new__(Tensor)
+        result.data = self.data
+        result.shape = tuple(out_shape)
+        result.stride = result.compute_stride(shape)
+        result.require_grad = self.require_grad
+
+        return result
+
+    def unfold(self, dim, win_size, step):
+        unfold_count = (self.shape[dim] - win_size) // step + 1
+        out_shape = tuple(list(self.shape[:dim]) + [unfold_count, win_size] + list(self.shape[dim + 1:]))
+        result = Tensor.__new__(Tensor)
+        result.data = c_func["unfold"](self.data, self.shape, out_shape, dim, win_size, step)
+
+        result.shape = out_shape
+        result.stride = result.compute_stride(result.shape)
+        result.require_grad = self.require_grad
+        return result
+

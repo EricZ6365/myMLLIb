@@ -3,7 +3,6 @@ import math
 from typing import NewType
 
 import matplotlib.pyplot as plt
-from numba.core.datamodel import register
 
 import visualize
 from Autograd import Autograd
@@ -71,14 +70,10 @@ class Model:
                 continue
 
             if not hasattr(T, "velocity"):
-                T.velocity = [0.0 for _ in T.data]
+                T.velocity = Tensor.zeros(*T.shape)
 
-            new_data = (ctypes.c_float * len(T.data))()
-
-            for i, (w, gw) in enumerate(zip(T.data, T.grad_node.grad_a.data)):
-                T.velocity[i] = momentum * T.velocity[i] + (1 - momentum) * gw
-                new_data[i] = w - lr * T.velocity[i]
-            T.data = new_data
+            T.velocity = T.velocity * momentum + T.grad_node.grad_a *  (1 - momentum)
+            T.data = (T - T.velocity * lr).data
 
     def save(self, path):
         with open(path, "w") as f:
@@ -140,26 +135,17 @@ class Conv1d(Module):
         k, s = self.kernel_size, self.stride
         L_out = (L - k) // s + 1
         assert L_out > 0, "input too short for given kernel_size/stride"
+        x_unfold = x.unfold(2, k, s)
+        x_windows = x_unfold.transpose(0, 3).reshape(B * L_out, C, k)
+        W_reshaped = self.weight.reshape(self.out_c, -1)
+        x_reshaped = x_windows.reshape(B * L_out, -1)
+        y = x_reshaped @ W_reshaped.transpose(0, 1)
 
-        out = []
-        W = self.weight.unsqueeze(0)  # (1, out_c, C, k)
-        for i in range(L_out):
-            start = i * s
-            end = start + k
-            x_win = x[:, :, start:end]
-            x_win = x_win.unsqueeze(1).broadcast((B, self.out_c, C, k))
-            Wb = W.broadcast((B, self.out_c, C, k))
+        y = y.reshape(B, L_out, self.out_c)
+        if self.bias is not None:
+            y = y + self.bias.unsqueeze(0).unsqueeze(0)
 
-            # Sum over channels and kernel
-            y = x_win.mul(Wb).sum(dim=2).sum(dim=2)  # (B, out_c)
-
-            if self.bias is not None:
-                y = y.clamp(0, float("inf")) + self.bias.unsqueeze(0)
-
-            # Add dimension for length
-            y = y.unsqueeze(2)  # (B, out_c, 1)
-            out.append(y)
-        return out[0].concat(*out[1:], dim=2)  # (B, out_c, L_out)
+        return y.transpose(1, 2)
 
     def visualize_output(self, x):
         y_out = self.forward(x)[0]
