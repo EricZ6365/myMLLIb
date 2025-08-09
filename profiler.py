@@ -1,6 +1,5 @@
-import sys
 import time
-
+import sys
 class SimpleProfiler:
     def __init__(self):
         self.timings = {}

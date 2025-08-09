@@ -1,7 +1,6 @@
 import ctypes
 import random
 import weakref
-
 from binding import c_func
 from functools import reduce
 from operator import mul
@@ -50,8 +49,25 @@ class Tensor:
         self.stride = self.compute_stride(self.shape)
 
     def value(self):
-        assert self.shape == (1, ) or self.shape == (), "must be a single element tensor to convert back to float"
+        total = reduce(mul, self.shape, 1)
+        assert total == 1;
         res = self.data[0]
+        return res
+
+    def to_list(self):
+        res = []
+        def build(i, offset, ctx):
+            for idx in range(self.shape[i]):
+                if i == len(self.shape) - 1:
+                    ctx.append(float(self.data[offset + idx]))
+                else:
+                    new_ctx = []
+                    build(i + 1, offset + idx * self.stride[i], new_ctx)
+                    ctx.append(new_ctx)
+
+            return ctx
+
+        build(0, 0, res)
         return res
 
     @staticmethod
@@ -158,6 +174,11 @@ class Tensor:
 
     def transpose(self, dim1, dim2):
         assert dim1 < len(self.shape) and dim2 < len(self.shape), "Dimension out of range"
+        if dim1 < 0:
+            dim1 += len(self.shape)
+
+        if dim2 < 0:
+            dim2 += len(self.shape)
 
         new_shape = list(self.shape)
         new_shape[dim1], new_shape[dim2] = new_shape[dim2], new_shape[dim1]
@@ -420,40 +441,54 @@ class Tensor:
         result.stride = self.compute_stride(result.shape)
         return result
 
+
     def sum(self, dim=None):
         if dim is None:
+            # Full reduction case - sum all elements
             result = Tensor.__new__(Tensor)
-            result.data = (ctypes.c_float * 1)(*(sum(self.data), ))
+            result.data = (ctypes.c_float * 1)(sum(self.data))
             result.shape = ()
             result.stride = ()
             result.require_grad = self.require_grad
             return result
 
+        # Handle negative dimensions
         if dim < 0:
             dim += len(self.shape)
 
-        assert 0 <= dim < len(self.shape), f"dim {dim} is out of bounds for shape {self.shape}"
+        if not 0 <= dim < len(self.shape):
+            raise ValueError(f"dim {dim} is out of bounds for shape {self.shape}")
 
         new_shape = self.shape[:dim] + self.shape[dim + 1:]
+        if not new_shape:
+            new_shape = (1,)  # Maintain as rank-1 tensor for scalar-like results
+        else:
+            new_shape = self.shape[:dim] + self.shape[dim + 1:]
 
         dim_size = self.shape[dim]
-        inner_block = 1
-        for s in self.shape[dim + 1:]:
-            inner_block *= s
         outer_block = 1
         for s in self.shape[:dim]:
             outer_block *= s
+        inner_block = 1
+        for s in self.shape[dim + 1:]:
+            inner_block *= s
 
-        result_data = (ctypes.c_float * (len(self.data) // dim_size))()
+        result_size = outer_block * inner_block
+        result_data = (ctypes.c_float * result_size)()
+
         for i in range(outer_block):
-            for j in range(0, inner_block, dim_size):
-                start = i * inner_block + j
-                block = self.data[start:start + dim_size]
-                result_data[start // dim_size] = sum(block)
+            for j in range(inner_block):
+                total = 0.0
+                for k in range(dim_size):
+                    idx = i * dim_size * inner_block + k * inner_block + j
+                    total += self.data[idx]
+                result_idx = i * inner_block + j
+                result_data[result_idx] = total
+
         result = Tensor.__new__(Tensor)
         result.data = result_data
-        result.shape = tuple(new_shape) if new_shape else ()
-        result.stride = self.compute_stride(result.shape) if new_shape else ()
+        result.shape = new_shape
+        result.stride = self.compute_stride(new_shape) if new_shape else (1,)
         result.require_grad = self.require_grad
         return result
 

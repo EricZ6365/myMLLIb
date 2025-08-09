@@ -63,17 +63,12 @@ class Model:
             return forward_func(*args, **kwargs)
         return wrap
 
-    def backward(self, loss, lr, momentum=0.9):
+    def backward(self, loss, lr):
         self.grad.backward(loss, loss)
         for T in self._tensors:
             if T.grad_node is None:
                 continue
-
-            if not hasattr(T, "velocity"):
-                T.velocity = Tensor.zeros(*T.shape)
-
-            T.velocity = T.velocity * momentum + T.grad_node.grad_a *  (1 - momentum)
-            T.data = (T - T.velocity * lr).data
+            T.data = (T - T.get_grad() * lr).data
 
     def save(self, path):
         with open(path, "w") as f:
@@ -136,17 +131,13 @@ class Conv1d(Module):
         L_out = (L - k) // s + 1
         assert L_out > 0, "input too short for given kernel_size/stride"
         x_unfold = x.unfold(2, k, s)
-        x_windows = x_unfold.transpose(0, 3).reshape(B * L_out, C, k)
+        x_reshaped = x_unfold.transpose(1, 2).reshape(B, L_out, -1)
         W_reshaped = self.weight.reshape(self.out_c, -1)
-        x_reshaped = x_windows.reshape(B * L_out, -1)
-        y = x_reshaped @ W_reshaped.transpose(0, 1)
-
-        y = y.reshape(B, L_out, self.out_c)
+        y = x_reshaped @ W_reshaped.unsqueeze(0).broadcast((B, self.out_c, self.in_c * self.kernel_size)).transpose(1, 2)
         if self.bias is not None:
-            y = y + self.bias.unsqueeze(0).unsqueeze(0)
+            y = y + self.bias.reshape(1, 1, self.out_c)
 
         return y.transpose(1, 2)
-
     def visualize_output(self, x):
         y_out = self.forward(x)[0]
         out_c = y_out.shape[0]

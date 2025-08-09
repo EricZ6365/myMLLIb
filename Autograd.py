@@ -10,10 +10,9 @@ def _make_bound(org_function, grad, op_name, tensor):
 
 def _matmul_derv(grad_output, a, b):
     return (
-        grad_output.matmul(b.transpose(0, 1)),
-        a.transpose(0, 1).matmul(grad_output),
+        grad_output.matmul(b.transpose(-2, -1)),
+        a.transpose(-2, -1).matmul(grad_output),
     )
-
 
 def _mul_derv(grad_output, a, b):
     return grad_output * b, grad_output * a
@@ -38,6 +37,7 @@ def _broadcast_derv(a, wa, shape):
 
     for dim in reversed(sum_dim):
         wa = wa.sum(dim).unsqueeze(dim)
+
 
     return [wa]
 
@@ -165,22 +165,12 @@ class SumOp:
             grad_input.stride = grad_input.compute_stride(self.a.shape)
             return [grad_input]
 
-        dim = self.dim
-        if isinstance(dim, int):
-            if dim < 0:
-                dim += len(self.a.shape)
-            dim = [dim]
-
-        grad_shape = list(self.a.shape)
-
-        for ax in dim:
-            grad_shape[ax] = 1
-
         reshaped_grad = grad_output
-        reshaped_grad.shape = tuple(grad_shape)
+        reshaped_grad.shape = grad_output.shape
         reshaped_grad.stride = reshaped_grad.compute_stride(reshaped_grad.shape)
         grad_input = reshaped_grad.broadcast(self.a.shape)
         return [grad_input]
+
 
 class MeanOp:
     __slots__ = [
@@ -507,12 +497,8 @@ class UnfoldOp:
             *self.input_shape[dim + 1:]
         )
 
-    def _coord(self, window_idx, pos_in_window):
-        return window_idx * self.step + pos_in_window
-
     def back(self, grad_output, output):
         result = Tensor.__new__(Tensor)
-
         result.data = c_func["unfold_backward"](grad_output.data, grad_output.shape, self.a.shape,
                                                 self.dim, self.win_size, self.step)
         result.shape = self.input_shape
@@ -786,7 +772,7 @@ class Autograd:
         visited = set()
         visited.add(grad_node)
         while queue:
-            node = queue.popleft()
+            node = queue.pop()
             node.back()
             for child in node.children:
                 if child is not None and child not in visited:
