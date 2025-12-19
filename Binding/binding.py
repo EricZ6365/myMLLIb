@@ -262,8 +262,8 @@ def load_clib(lib_name, directory="."):
 
     return ctypes.CDLL(str(lib_path))
 
-
-os.makedirs(base_dir, exist_ok=True)
+if not os.path.exists(base_dir):
+    raise FileNotFoundError(f"Base directory not found: {base_dir}")
 lib = load_clib("c_utils", base_dir)
 for name, arg_types, res_type, wrap in names:
     function = getattr(lib, name + "_py")

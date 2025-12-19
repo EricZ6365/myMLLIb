@@ -1,7 +1,7 @@
 import ctypes
 import random
 import weakref
-from binding import c_func
+from Binding.binding import c_func
 from functools import reduce
 from operator import mul
 
@@ -77,11 +77,13 @@ class Tensor:
     @staticmethod
     def flat(data):
         res = []
-        if isinstance(data, (int, float)):
-            return [data]
-        if isinstance(data, (list, tuple)):
-            for li in data:
-                res.extend(Tensor.flat(li))
+        try:
+            iterator = iter(data)
+        except TypeError:
+            return [float(data)]
+        else:
+            for item in iterator:
+                res.extend(Tensor.flat(item))
         return res
 
     @staticmethod
@@ -145,9 +147,6 @@ class Tensor:
 
     def __repr__(self):
         return f"Tensor(shape={self.shape}, data_length={len(self.data)}, data={list(self.data[:5]) if len(self.data) > 5 else list(self.data)})"
-
-    def __matmul__(self, other):
-        return self.matmul(other)
 
     def matmul(self, other):
         assert self.shape[-1] == other.shape[-2], (
@@ -333,6 +332,7 @@ class Tensor:
     def __truediv__(self, other): return self._bind_broadcast(other, "div")
     def __getitem__(self, *args, **kwargs): return self.index(*args)
     def __setitem__(self, key, value): return self._setitem(key, value)
+    def __matmul__(self, other): return self._bind_matmul_broadcast(other)
 
     @staticmethod
     def _bi_broadcast(a, b, op_name):
@@ -366,8 +366,56 @@ class Tensor:
         a_norm, b_norm = _inner(a, b)
         return getattr(a_norm, op_name)(b_norm)
 
+    @staticmethod
+    def _matmul_broadcast(a, b):
+        func = getattr(a, "matmul")
+        if len(a.shape) == len(b.shape):
+            return func(b)
+
+        def _inner(a, b):
+            sa, sb = tuple(a.shape), tuple(b.shape)
+
+            if len(sa) < 2:
+                sa = tuple([1] + list(sa))
+            if len(sb) < 2:
+                sb = tuple(list(sb) + [1])
+
+            if sa[-1] != sb[-2]:
+                raise ValueError(
+                    f"Incompatible matmul dimensions: {sa[-1]} and {sb[-2]}"
+                )
+
+            batch_a, mat_a = sa[:-2], sa[-2:]
+            batch_b, mat_b = sb[:-2], sb[-2:]
+
+            out_batch = []
+            for da, db in zip(batch_a, batch_b):
+                if da == db:
+                    out_batch.append(da)
+                elif da == 1:
+                    out_batch.append(db)
+                elif db == 1:
+                    out_batch.append(da)
+                else:
+                    raise ValueError(
+                        f"Incompatible broadcast shapes: {sa} and {sb}"
+                    )
+
+            out_batch = tuple(out_batch)
+
+            a_view = a.broadcast(out_batch + mat_a)
+            b_view = b.broadcast(out_batch + mat_b)
+
+            return a_view, b_view
+
+        a_norm, b_norm = _inner(a, b)
+        return getattr(a_norm, "matmul")(b_norm)
+
     def _bind_broadcast(self, other, op_name):
         return Tensor._bi_broadcast(self, other, op_name)
+
+    def _bind_matmul_broadcast(self, other):
+        return Tensor._matmul_broadcast(self, other)
 
     def add(self, other):
         return self._binary_op(other, c_func["add"])
@@ -400,9 +448,9 @@ class Tensor:
 
         len_diff = len(shape_other) - len(shape_self)
         if len_diff > 0:
-            shape_self = shape_self + [1] * len_diff
+            shape_self =  [1] * len_diff + shape_self
         elif len_diff < 0:
-            shape_other = shape_other + [1] * (-len_diff)
+            shape_other = [1] * (-len_diff) + shape_other
 
         out_shape = []
         for s, o in zip(shape_self, shape_other):

@@ -34,3 +34,5 @@ class SimpleProfiler:
         sorted_funcs = sorted(self.timings.items(), key=lambda x: -x[1])
         for (filename, func), total_time in sorted_funcs[:limit]:
             print(f"{func:30s} ({filename}) - {total_time:.6f} sec")
+
+__all__ = ["SimpleProfiler"]

@@ -1,6 +1,6 @@
 from collections import deque
-from Tensor import Tensor
-from binding import c_func
+from Core.Tensor import Tensor
+from Binding.binding import c_func
 
 
 def _make_bound(org_function, grad, op_name, tensor):
@@ -465,8 +465,6 @@ class NegOp:
 
 
 import ctypes
-from functools import reduce
-from operator import mul
 
 
 class UnfoldOp:

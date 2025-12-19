@@ -1,4 +1,8 @@
-import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    print("Please install matplotlib")
+
 from collections import defaultdict
 _op_color = {
     "Leaf": "green",
@@ -108,3 +112,6 @@ def visualize_DCG(root, figsize=(8, 6), node_size=1000, font_size=7):
     plt.title("Dynamic Computational Graph")
     plt.tight_layout()
     plt.show()
+
+
+__all__ = ["visualize_DCG"]
