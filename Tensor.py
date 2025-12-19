@@ -88,10 +88,7 @@ class Tensor:
     def randn(*sizes, require_grad=True):
         randn_tensor = Tensor.__new__(Tensor)
         total = reduce(mul, sizes, 1)
-        out = (ctypes.c_float * total)()
-        for i in range(total):
-            out[i] = random.normalvariate()
-        randn_tensor.data  = out
+        randn_tensor.data  = c_func["randn"](total)
         randn_tensor.shape = sizes
         randn_tensor.shape = sizes
         randn_tensor.stride = Tensor.compute_stride(sizes)
@@ -145,6 +142,7 @@ class Tensor:
             return None
 
         return self.grad_node.grad_a
+
     def __repr__(self):
         return f"Tensor(shape={self.shape}, data_length={len(self.data)}, data={list(self.data[:5]) if len(self.data) > 5 else list(self.data)})"
 
@@ -434,7 +432,10 @@ class Tensor:
                 raise ValueError(f"Incompatible broadcast shapes: {self.shape} and {other.shape}")
         else:
             total = reduce(mul, self.shape, 1)
-            result.data = apply_func(self.data, (ctypes.c_float * total)(*([other] * total)), len(self.shape))
+            b_arr = (ctypes.c_float * total)()
+            for i in range(total):
+                b_arr[i] = other
+            result.data = apply_func(self.data, b_arr, len(self.shape))
 
         result.require_grad = self.require_grad
         result.shape = self.shape

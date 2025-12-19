@@ -23,11 +23,13 @@ _op_color = {
     "BroadCastOp": "#33FF8F",
     "IndexOp": "#33A6FF",
     "UnsqueezeOp": "#33A6FF",
+    "TransposeOp": "#33A6FF",
     "SqueezeOp": "#33A6FF",
+    "ReshapeOp": "#33A6FF",
     "FlattenOp": "#33A6FF",
 
-    "ConcatOp": "#8F33FF"
-
+    "ConcatOp": "#33A6FF",
+    "UnfoldOp": "#33A6FF",
 }
 class _DrawGraphNode:
     def __init__(self, op_name):

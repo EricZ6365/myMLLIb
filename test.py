@@ -1,7 +1,5 @@
-import math
 import os
 import random
-import sys
 
 import matplotlib.pyplot as plt
 import torchvision.io.image
@@ -20,33 +18,30 @@ class OptimizedConvModel(Model):
     def __init__(self, num_class, image_size):
         super().__init__()
         # Use larger kernel sizes and more channels for better feature extraction
-        self.conv1 = Conv1d(self.grad, in_c=3, out_c=4, kernel_size=7)
-        self.conv2 = Conv1d(self.grad, in_c=4, out_c=4, kernel_size=5)
-        self.conv3 = Conv1d(self.grad, in_c=4, out_c=8, kernel_size=3)
+        self.conv1 = Conv1d(self.grad, in_c=3, out_c=4, kernel_size=25)
+        self.conv2 = Conv1d(self.grad, in_c=4, out_c=8, kernel_size=25)
+        self.conv3 = Conv1d(self.grad, in_c=8, out_c=16, kernel_size=25)
         self.num_class = num_class
         self.image_size = image_size
 
-        conv_output_size = 8 * (image_size[0] * image_size[1] - 12)  # Adjusted for padding
+        conv_output_size = 16 * (image_size[0] * image_size[1] - 72)  # Adjusted for padding
 
-        self.fc1 = Linear(self.grad, in_feature=conv_output_size, out_feature=400)
-        self.fc2 = Linear(self.grad, in_feature=400, out_feature=200)
+        self.fc1 = Linear(self.grad, in_feature=conv_output_size, out_feature=200)
         self.fc3 = Linear(self.grad, in_feature=200, out_feature=num_class)
 
         self.register_module(self.conv1, "conv1")
         self.register_module(self.conv2, "conv2")
         self.register_module(self.conv3, "conv3")
         self.register_module(self.fc1, "fc1")
-        self.register_module(self.fc2, "fc2")
         self.register_module(self.fc3, "fc3")
 
+
     def forward(self, x):
-        x = self.conv1(x).clamp(0, float("inf"))  # ReLU effect
+        x = self.conv1(x).clamp(0, float("inf"))
         x = self.conv2(x).clamp(0, float("inf"))
         x = self.conv3(x).clamp(0, float("inf"))
         x = x.flatten(1)
-
         x = self.fc1(x).clamp(0, float("inf"))
-        x = self.fc2(x).clamp(0, float("inf"))
         x = self.fc3(x)
         return x
 
@@ -54,12 +49,12 @@ class OptimizedConvModel(Model):
         self.grad.no_track = True
         return self.forward(x)
 
-def cross_entropy_loss(pred, target):
-    return ((pred - target) ** 2).mean()
+def L1Loss(pred, target):
+    return (pred - target).abs().mean()
 
 def one_hot_encode(label, num_classes):
     vec = [0.] * num_classes
-    vec[label] = 1
+    vec[label] = 10
     return vec
 
 def get_acc(pred, y, pred_axis=-1):
@@ -86,7 +81,6 @@ def get_acc(pred, y, pred_axis=-1):
 
 
 def load_sneaker_optimized(batch_size, limit, image_size, class_limit, split=0.8, data_dir="data/sneakers"):
-    # Enhanced data loading with better augmentation
     transform = transforms.Compose([
         transforms.Resize(image_size),
     ])
@@ -130,7 +124,7 @@ def load_sneaker_optimized(batch_size, limit, image_size, class_limit, split=0.8
 
 if __name__ == "__main__":
     batch_size = 1
-    image_size = (50, 50)
+    image_size = (20, 20)
 
     train_batch, val_batch, num_class = load_sneaker_optimized(
         batch_size=batch_size,
@@ -140,24 +134,22 @@ if __name__ == "__main__":
     )
 
     epochs = 50
+
     model = OptimizedConvModel(num_class, image_size)
     for epoch in range(epochs):
         train_loss = 0
         train_acc = 0
         val_loss = 0
         val_acc = 0
-        lr =  1e-4
-
+        lr = 5e-4
         for batch in tqdm(train_batch):
             b_X, b_y = batch
-            # plt.imshow(Tensor(b_X[0]).transpose(0, 1).reshape(50, 50, 3).to_list())
-            # plt.show()
             b_X = Tensor(b_X)
             b_y = Tensor(b_y)
             pred = model.forward(b_X)
-            loss = cross_entropy_loss(pred, b_y)
+
+            loss = L1Loss(pred, b_y)
             model.backward(loss, lr)
-            print(loss)
             train_loss += loss.value() / len(train_batch)
             train_acc += get_acc(pred, b_y) / len(train_batch)
             b_y.release()
@@ -168,14 +160,12 @@ if __name__ == "__main__":
             b_X = Tensor(b_X)
             b_y = Tensor(b_y)
             pred = model.inference(b_X)
-            loss = cross_entropy_loss(pred, b_y)
+            loss = L1Loss(pred, b_y)
 
             val_loss += loss.value() / len(val_batch)
             val_acc += get_acc(pred, b_y) / len(val_batch)
 
             b_y.release()
-        # if epoch % 20 == 0:
-        #     model.conv1.visualize_output(b_X)
 
         print(f"\nEpoch {epoch:3d} | "
               f"Train Loss = {train_loss:.4f}, Train Acc = {100 * train_acc:.2f}% | "

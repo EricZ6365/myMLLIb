@@ -131,6 +131,13 @@ def unfold_back_op_wrap(func):
         return out
     return inner
 
+def randn_op_wrap(func):
+    def inner(total):
+        out = (ctypes.c_float * total)()
+        func(out, total)
+        return out
+
+    return inner
 bin_op_sig = ((ctypes.POINTER(ctypes.c_float),
                ctypes.POINTER(ctypes.c_float),
                ctypes.c_int,
@@ -202,6 +209,12 @@ unfold_back_op_sig = ((
     ctypes.c_int,
     ctypes.c_int
 ), None)
+
+randn_op_sig = ((
+    ctypes.POINTER(ctypes.c_float),
+    ctypes.c_int,
+), None)
+
 names = [
     ["add", *bin_op_sig, bin_op_wrap],
     ["sub", *bin_op_sig, bin_op_wrap],
@@ -218,6 +231,7 @@ names = [
     ["ln", *unary_op_sig, unary_op_wrap],
     ["abs", *unary_op_sig, unary_op_wrap],
     ["exp", *unary_op_sig, unary_op_wrap],
+    ["randn", *randn_op_sig, randn_op_wrap],
     ["unfold_backward", *unfold_back_op_sig, unfold_back_op_wrap],
 ]
 

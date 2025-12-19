@@ -3,6 +3,7 @@ import math
 from typing import NewType
 
 import matplotlib.pyplot as plt
+from transformers.modeling_gguf_pytorch_utils import TENSOR_PROCESSORS
 
 import visualize
 from Autograd import Autograd
@@ -68,7 +69,7 @@ class Model:
         for T in self._tensors:
             if T.grad_node is None:
                 continue
-            T.data = (T - T.get_grad() * lr).data
+            T.data = (T - T.get_grad() * Tensor(lr)).data
 
     def save(self, path):
         with open(path, "w") as f:
@@ -116,7 +117,6 @@ class Conv1d(Module):
         self.out_c = out_c
         self.kernel_size = kernel_size
         self.stride = stride
-
         scale = (in_c * kernel_size) ** 0.5
         self.weight = Tensor.randn(out_c, in_c, kernel_size) / scale
         self.bias = Tensor.zeros(out_c) if bias else None

@@ -301,6 +301,7 @@ class AbsOp:
         grad_input.stride = self.a.compute_stride(self.a.shape)
         return [grad_input]
 
+
 class ClampOp:
     __slots__ = [
         "a",
@@ -308,6 +309,7 @@ class ClampOp:
         "max_value",
         "inputs"
     ]
+
     def __init__(self, inp, min_value, max_value):
         self.a = inp
         self.min_value = min_value
@@ -317,10 +319,10 @@ class ClampOp:
     def back(self, grad_output, output):
         grad_input = []
         for i, val in enumerate(self.a.data):
-            if self.min_value < val < self.max_value:
-                grad_input.append(grad_output.data[i])
-            else:
+            if val <= self.min_value or val >= self.max_value:
                 grad_input.append(0)
+            else:
+                grad_input.append(grad_output.data[i])
 
         grad_input = Tensor(grad_input)
         grad_input.shape = self.a.shape
