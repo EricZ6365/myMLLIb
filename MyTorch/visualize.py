@@ -1,7 +1,7 @@
 try:
     import matplotlib.pyplot as plt
 except ImportError:
-    print("Please install matplotlib")
+    print("Please install matplotlib for visualization.")
 
 from collections import defaultdict
 _op_color = {
@@ -51,7 +51,7 @@ def visualize_DCG(root, figsize=(8, 6), node_size=1000, font_size=7):
 
     def dfs_build(node, d=0):
         if node not in memo:
-            memo[node] = _DrawGraphNode(node.op.__class__.__name__ if node.op is not None else "Leaf")
+            memo[node] = _DrawGraphNode(node.op.__class__.__name__ if getattr(node, "op", None) is not None else "Leaf")
         depth[memo[node]] = max(depth.get(memo[node], -1), d)
 
         if node in visited:
@@ -62,7 +62,7 @@ def visualize_DCG(root, figsize=(8, 6), node_size=1000, font_size=7):
             if not parent:
                 continue
             if parent not in memo:
-                memo[parent] = _DrawGraphNode(parent.op.__class__.__name__ if parent.op is not None else "Leaf")
+                memo[parent] = _DrawGraphNode(parent.op.__class__.__name__ if getattr(node, "op", None) is not None else "Leaf")
             edges.add((memo[parent], memo[node]))
             dfs_build(parent, d + 1)
 

@@ -45,7 +45,8 @@ class Tensor:
         self.shape = self._get_shape(data)
         assert len(self.data) == reduce(mul, self.shape, 1)
         self.require_grad = require_grad
-        self.grad_node = None
+        if require_grad:
+            self.grad_node = None
         self.stride = self.compute_stride(self.shape)
 
     def value(self):
@@ -388,8 +389,11 @@ class Tensor:
             batch_a, mat_a = sa[:-2], sa[-2:]
             batch_b, mat_b = sb[:-2], sb[-2:]
 
+            len_diff = len(batch_b) - len(batch_a)
+            pad_a = [1] * (len_diff if len_diff > 0 else 0)
+            pad_b = [1] * (len_diff if len_diff < 0 else 0)
             out_batch = []
-            for da, db in zip(batch_a, batch_b):
+            for da, db in zip(pad_a + list(batch_a), pad_b + list(batch_b)):
                 if da == db:
                     out_batch.append(da)
                 elif da == 1:
@@ -431,6 +435,39 @@ class Tensor:
 
     def pow(self, other):
         return self._binary_op(other, c_func["pow"])
+
+    def rsub(self, other):
+        if isinstance(other, Tensor):
+            return
+        return Tensor(other, require_grad=False) - self
+
+    def rtruediv(self, other):
+        if isinstance(other, Tensor):
+            return
+        return Tensor(other, require_grad=False) / self
+
+    def radd(self, other):
+        if isinstance(other, Tensor):
+            return
+        return Tensor(other, require_grad=False) + self
+
+    def rmul(self, other):
+        if isinstance(other, Tensor):
+            return
+        return Tensor(other, require_grad=False) * self
+
+    def __rsub__(self, other):
+        return self.rsub(other)
+
+    def __radd__(self, other):
+        return self.radd(other)
+
+    def __rtruediv__(self, other):
+        return self.rtruediv(other)
+
+    def __rmul__(self, other):
+        return self.rmul(other)
+
 
     def log(self, other=None):
         if other is None:
@@ -679,12 +716,15 @@ class Tensor:
     def reshape(self, *shape):
         out_shape = []
         acc = 1
+        used_all = False
         for i, _slice in enumerate(shape):
             if _slice == -1:
                 out_shape.append(len(self.data) // acc)
-                break
+                used_all = True
+                continue
             acc *= _slice
-            out_shape.append(_slice)
+            out_shape.append(_slice if not used_all else 1)
+
         assert len(self.data) == reduce(mul, out_shape, 1)
 
         result = Tensor.__new__(Tensor)

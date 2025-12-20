@@ -53,7 +53,6 @@ class Model:
             for value in kwargs.values():
                 if isinstance(value, Tensor):
                     tmp_tensor.append(value)
-
             self.grad = Autograd(self._tensors + tmp_tensor)
             return forward_func(*args, **kwargs)
         return wrap
@@ -78,10 +77,9 @@ class Model:
         self.grad.zero()
 
 class Module:
-    def __init__(self, grad):
+    def __init__(self):
         self._tensors = []
         self.params = {}
-        self.grad = grad
 
     def register_tensor(self, T):
         self._tensors.append(T)
@@ -102,10 +100,10 @@ class Module:
         return getattr(self, "forward")(*args, **kwargs)
 
 class Linear(Module):
-    def __init__(self, grad, in_feature, out_feature):
-        super().__init__(grad)
-        self.linear = Tensor.randn(in_feature, out_feature) / math.sqrt(in_feature * out_feature)
-        self.bias = Tensor.randn(1, out_feature)
+    def __init__(self, in_feature, out_feature):
+        super().__init__()
+        self.linear = Tensor.randn(in_feature, out_feature, require_grad=True) / math.sqrt(in_feature + out_feature)
+        self.bias = Tensor.randn(1, out_feature, require_grad=True)
         self.register_param(self.linear, "linear")
         self.register_param(self.bias, "bias")
 
