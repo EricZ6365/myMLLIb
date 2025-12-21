@@ -62,7 +62,7 @@ def visualize_DCG(root, figsize=(8, 6), node_size=1000, font_size=7):
             if not parent:
                 continue
             if parent not in memo:
-                memo[parent] = _DrawGraphNode(parent.op.__class__.__name__ if getattr(node, "op", None) is not None else "Leaf")
+                memo[parent] = _DrawGraphNode(parent.op.__class__.__name__ if getattr(parent, "op", None) is not None else "Leaf")
             edges.add((memo[parent], memo[node]))
             dfs_build(parent, d + 1)
 

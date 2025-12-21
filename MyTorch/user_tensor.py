@@ -13,27 +13,49 @@ def randn(shape, *args, require_grad=False):
 def rand(shape, *args, require_grad=False):
     if not isinstance(shape, tuple):
         shape = (shape, *args)
-    return Tensor.rand(shape, require_grad=require_grad)
+    return Tensor.rand(*shape, require_grad=require_grad)
+
+def zeros(shape, *args, require_grad=False):
+    if not isinstance(shape, tuple):
+        shape = (shape, *args)
+
+    return Tensor.zeros(*shape, require_grad=require_grad)
+
+def ones(shape, *args, require_grad=False):
+    if not isinstance(shape, tuple):
+        shape = (shape, *args)
+
+    return Tensor.zeros(*shape, require_grad=require_grad) + 1
 
 def arange(start, stop=None, step=1):
     if stop is None:
         stop = start
         start = 0
 
+    if step == 0:
+        raise ValueError("step must not be zero")
+
     result = []
     i = start
 
+    # Use a loop that avoids floating point accumulation errors
+    n = 0
     if step > 0:
-        while i < stop:
-            result.append(i)
-            i += step
-    elif step < 0:
-        while i > stop:
-            result.append(i)
-            i += step
+        while True:
+            val = start + n * step
+            if val >= stop:
+                break
+            result.append(val)
+            n += 1
     else:
-        raise ValueError("step must not be zero")
+        while True:
+            val = start + n * step
+            if val <= stop:
+                break
+            result.append(val)
+            n += 1
 
     return Tensor(result)
 
-__all__ = ["new_tensor", "randn", "rand", "arange"]
+
+__all__ = ["new_tensor", "randn", "rand", "arange", "ones", "zeros"]

@@ -226,10 +226,16 @@ class Tensor:
             if isinstance(s, slice):
                 start, stop, step = s.start, s.stop, s.step
                 dim = self.shape[i]
+
                 step = 1 if step is None else step
                 start = 0 if start is None else (start + dim if start < 0 else start)
                 stop = dim if stop is None else (stop + dim if stop < 0 else stop)
-                new_shape.append((stop - start + (step - 1)) // step)
+                start = max(0, min(start, dim))
+                stop = max(0, min(stop, dim))
+
+                size = (stop - start + (step - 1)) // step
+                new_shape.append(size)
+
             elif isinstance(s, int):
                 if s < 0:
                     s = self.shape[i] + s
@@ -391,7 +397,7 @@ class Tensor:
 
             len_diff = len(batch_b) - len(batch_a)
             pad_a = [1] * (len_diff if len_diff > 0 else 0)
-            pad_b = [1] * (len_diff if len_diff < 0 else 0)
+            pad_b = [1] * (-len_diff if len_diff < 0 else 0)
             out_batch = []
             for da, db in zip(pad_a + list(batch_a), pad_b + list(batch_b)):
                 if da == db:
@@ -715,15 +721,20 @@ class Tensor:
 
     def reshape(self, *shape):
         out_shape = []
-        acc = 1
+        wild_idx = reduce(mul, self.shape, 1) // reduce(mul, shape, 1)
+        if wild_idx < 0:
+            wild_idx = -wild_idx
+
         used_all = False
         for i, _slice in enumerate(shape):
             if _slice == -1:
-                out_shape.append(len(self.data) // acc)
+                if used_all:
+                    raise ValueError("at most one -1 can used in reshaping")
+                out_shape.append(wild_idx)
                 used_all = True
                 continue
-            acc *= _slice
-            out_shape.append(_slice if not used_all else 1)
+
+            out_shape.append(_slice)
 
         assert len(self.data) == reduce(mul, out_shape, 1)
 

@@ -110,4 +110,88 @@ class Linear(Module):
     def forward(self, x):
         return x @ self.linear + self.bias
 
-__all__= ["Module", "Model", "Linear"]
+class Conv1D(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+
+        self.weight = (
+            Tensor.randn(out_channels, in_channels, kernel_size, require_grad=True)
+            / math.sqrt(in_channels * kernel_size)
+        )
+        self.bias = Tensor.randn(1, out_channels, require_grad=True)
+
+        self.register_param(self.weight, "weight")
+        self.register_param(self.bias, "bias")
+
+    def forward(self, x):
+        x_unf = x.unfold(
+            dim=2,
+            size=self.kernel_size,
+            step=self.stride,
+            padding=self.padding
+        )
+
+        w_flat = self.weight.reshape(self.weight.shape[0], -1)
+
+        out = w_flat @ x_unf
+        out = out + self.bias.reshape(1, -1, 1)
+
+        return out
+
+class Conv2D(Module):
+    def __init__(
+            self,
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=1,
+    ):
+        super().__init__()
+
+        # normalize arguments
+        if isinstance(kernel_size, int):
+            kernel_size = (kernel_size, kernel_size)
+        if isinstance(stride, int):
+            stride = (stride, stride)
+
+        self.kernel_size = kernel_size
+        self.stride = stride
+
+        kh, kw = kernel_size
+
+        self.weight = (
+                Tensor.randn(out_channels, in_channels, kh, kw, require_grad=True)
+                / math.sqrt(in_channels * kh * kw)
+        )
+        self.bias = Tensor.randn(1, out_channels, require_grad=True)
+
+        self.register_param(self.weight, "weight")
+        self.register_param(self.bias, "bias")
+
+    def forward(self, x):
+        # x: (N, C, H, W)
+        N, C, H, W = x.shape
+        kH, kW = self.kernel_size
+        sH, sW = self.stride
+
+        x_unf = x.unfold(2, kH, sH).unfold(4, kW, sW)
+        x_unf = x_unf.transpose(-2, -3)
+        out_h = x_unf.shape[2]
+        out_w = x_unf.shape[3]
+
+        x_unf = x_unf.reshape(N, out_h * out_w, C * kH * kW)
+
+        # Flatten weights
+        w_flat = self.weight.reshape(self.weight.shape[0], -1)
+        out = x_unf @ w_flat.transpose(0, 1)
+
+        out = out + self.bias.reshape(1, 1, -1)
+        out = out.transpose(1, 2).reshape(N, self.weight.shape[0], out_h, out_w)
+
+        return out
+
+
+__all__= ["Module", "Model", "Linear", "Conv1D", "Conv2D"]

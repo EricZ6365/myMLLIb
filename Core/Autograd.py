@@ -370,10 +370,7 @@ class IndexOp:
     ]
     def __init__(self, inp, *slices):
         self.a = inp
-        if len(slices) == 1 and isinstance(slices[0], int):
-            self.slices = (slices[0], )
-        else:
-            self.slices = list(*slices)
+        self.slices = slices
         self.inputs = [inp]
 
     def back(self, grad_output, output):
